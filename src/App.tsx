@@ -10,6 +10,7 @@ import { JobPosts } from "./pages/JobPosts";
 import { ResumeResults } from "./pages/ResumeResults";
 import { InterviewResults } from "./pages/InterviewResults";
 import NotFound from "./pages/NotFound";
+import { JobProvider } from "./contexts/JobContext";
 
 const queryClient = new QueryClient();
 
@@ -18,17 +19,19 @@ const App = () => (
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
-        <Layout>
-          <Routes>
-            <Route path="/" element={<NewJob />} />
-            <Route path="/job-posts" element={<JobPosts />} />
-            <Route path="/resume-results" element={<ResumeResults />} />
-            <Route path="/interview-results" element={<InterviewResults />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </Layout>
-      </BrowserRouter>
+      <JobProvider>
+        <BrowserRouter>
+          <Layout>
+            <Routes>
+              <Route path="/" element={<NewJob />} />
+              <Route path="/job-posts" element={<JobPosts />} />
+              <Route path="/resume-results" element={<ResumeResults />} />
+              <Route path="/interview-results" element={<InterviewResults />} />
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </Layout>
+        </BrowserRouter>
+      </JobProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );
