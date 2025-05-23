@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { PageHeader } from '../components/PageHeader';
 import { ChevronDownIcon, ChevronRightIcon, PlayIcon, ChatBubbleLeftRightIcon, CheckCircleIcon, ClockIcon } from '@heroicons/react/24/outline';
@@ -164,8 +165,10 @@ export const InterviewResults: React.FC = () => {
               <div>
                 <h4 className="text-xl font-bold text-gray-900 mb-6">Scoring & Evaluation</h4>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
-                  {Object.entries(mockCandidateResult.scores).filter(([key]) => key !== 'recommendation').map(([category, score]) => (
-                    <div key={category} className={`text-center p-6 bg-gradient-to-br ${getScoreColor(score)} rounded-2xl shadow-lg`}>
+                  {Object.entries(mockCandidateResult.scores)
+                    .filter(([key, value]) => key !== 'recommendation' && typeof value === 'number')
+                    .map(([category, score]) => (
+                    <div key={category} className={`text-center p-6 bg-gradient-to-br ${getScoreColor(score as number)} rounded-2xl shadow-lg`}>
                       <div className="text-3xl font-bold">{score}%</div>
                       <div className="text-sm capitalize font-semibold opacity-90">{category}</div>
                     </div>
