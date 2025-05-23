@@ -1,12 +1,6 @@
 
 import React, { useState, ChangeEvent } from 'react';
-import { CloudArrowUpIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
-
-// Import the extended HTML input attributes type
-interface HTMLInputAttributes extends React.InputHTMLAttributes<HTMLInputElement> {
-  webkitdirectory?: string;
-  directory?: string;
-}
+import { DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
 
 interface AIAnalysisProps {
   jobData: any;
@@ -43,7 +37,7 @@ export const AIAnalysis: React.FC<AIAnalysisProps> = ({ jobData, onNext, onPrev 
       <div className="bg-gradient-to-br from-blue-50 to-indigo-50 p-8 rounded-xl border border-blue-200 shadow-sm">
         <h3 className="text-xl font-semibold text-gray-900 mb-6">AI Job Analysis</h3>
         
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 gap-8">
           <div>
             <h4 className="text-sm font-medium text-gray-700 mb-3">Required Skills</h4>
             <div className="flex flex-wrap gap-2">
@@ -110,7 +104,7 @@ export const AIAnalysis: React.FC<AIAnalysisProps> = ({ jobData, onNext, onPrev 
                   type="file"
                   webkitdirectory=""
                   directory=""
-                  multiple={true}
+                  multiple
                   onChange={handleFolderUpload}
                   className="hidden"
                 />

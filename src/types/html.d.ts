@@ -1,6 +1,8 @@
 
 // Extend the HTMLInputElement interface to include directory selection attributes
-interface HTMLInputAttributes extends React.InputHTMLAttributes<HTMLInputElement> {
-  webkitdirectory?: string;
-  directory?: string;
+declare namespace React {
+  interface InputHTMLAttributes<T> extends HTMLAttributes<T> {
+    webkitdirectory?: string | boolean;
+    directory?: string | boolean;
+  }
 }
