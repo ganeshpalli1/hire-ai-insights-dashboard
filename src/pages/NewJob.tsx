@@ -1,0 +1,89 @@
+
+import React, { useState } from 'react';
+import { PageHeader } from '../components/PageHeader';
+import { JobDetailsForm } from '../components/JobDetailsForm';
+import { AIAnalysis } from '../components/AIAnalysis';
+import { InterviewConfig } from '../components/InterviewConfig';
+
+const steps = [
+  { id: 1, name: 'Job Details', description: 'Enter job requirements' },
+  { id: 2, name: 'AI Analysis', description: 'Review AI insights and upload resumes' },
+  { id: 3, name: 'Interview Setup', description: 'Configure AI interview parameters' },
+];
+
+export const NewJob: React.FC = () => {
+  const [currentStep, setCurrentStep] = useState(1);
+  const [jobData, setJobData] = useState({
+    role: '',
+    experience: '',
+    description: '',
+  });
+
+  const nextStep = () => setCurrentStep(Math.min(currentStep + 1, 3));
+  const prevStep = () => setCurrentStep(Math.max(currentStep - 1, 1));
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <PageHeader 
+        title="Create New Job" 
+        subtitle="Set up a new position and configure AI-powered recruitment"
+      />
+      
+      <div className="p-6">
+        {/* Progress Steps */}
+        <div className="mb-8">
+          <div className="flex items-center justify-between">
+            {steps.map((step, index) => (
+              <div key={step.id} className="flex items-center">
+                <div className={`flex items-center justify-center w-10 h-10 rounded-full border-2 transition-colors ${
+                  currentStep >= step.id
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'bg-white border-gray-300 text-gray-500'
+                }`}>
+                  {step.id}
+                </div>
+                <div className="ml-4">
+                  <p className={`text-sm font-medium ${
+                    currentStep >= step.id ? 'text-blue-600' : 'text-gray-500'
+                  }`}>
+                    {step.name}
+                  </p>
+                  <p className="text-xs text-gray-500">{step.description}</p>
+                </div>
+                {index < steps.length - 1 && (
+                  <div className={`w-24 h-0.5 mx-4 transition-colors ${
+                    currentStep > step.id ? 'bg-blue-600' : 'bg-gray-300'
+                  }`} />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Step Content */}
+        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          {currentStep === 1 && (
+            <JobDetailsForm
+              data={jobData}
+              onChange={setJobData}
+              onNext={nextStep}
+            />
+          )}
+          {currentStep === 2 && (
+            <AIAnalysis
+              jobData={jobData}
+              onNext={nextStep}
+              onPrev={prevStep}
+            />
+          )}
+          {currentStep === 3 && (
+            <InterviewConfig
+              onPrev={prevStep}
+              onComplete={() => console.log('Job created!')}
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
