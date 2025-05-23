@@ -1,6 +1,12 @@
 
-import React, { useState } from 'react';
+import React, { useState, ChangeEvent } from 'react';
 import { CloudArrowUpIcon, DocumentIcon, FolderIcon } from '@heroicons/react/24/outline';
+
+// Import the extended HTML input attributes type
+interface HTMLInputAttributes extends React.InputHTMLAttributes<HTMLInputElement> {
+  webkitdirectory?: string;
+  directory?: string;
+}
 
 interface AIAnalysisProps {
   jobData: any;
@@ -104,7 +110,7 @@ export const AIAnalysis: React.FC<AIAnalysisProps> = ({ jobData, onNext, onPrev 
                   type="file"
                   webkitdirectory=""
                   directory=""
-                  multiple
+                  multiple={true}
                   onChange={handleFolderUpload}
                   className="hidden"
                 />
