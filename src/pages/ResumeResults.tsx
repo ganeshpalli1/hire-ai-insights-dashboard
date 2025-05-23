@@ -72,37 +72,37 @@ export const ResumeResults: React.FC = () => {
               </button>
 
               {expandedJob === job.id && (
-                <div className="px-8 pb-8 border-t border-gray-100 bg-gray-50">
-                  <div className="pt-6 space-y-6">
+                <div className="px-8 pb-6 border-t border-gray-100 bg-gradient-to-b from-gray-50 to-white">
+                  <div className="pt-4 space-y-4">
                     {mockCandidates.map((candidate, index) => (
-                      <div key={index} className="bg-white border border-gray-200 rounded-2xl p-8 hover:shadow-lg transition-all duration-300 hover:border-blue-200">
-                        <div className="flex items-center justify-between mb-6">
-                          <div className="flex items-center space-x-4">
-                            <div className="w-12 h-12 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white font-bold text-lg">
+                      <div key={index} className="bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md transition-all duration-300 hover:border-blue-200">
+                        <div className="flex items-start justify-between mb-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white font-bold text-sm">
                               {candidate.name.split(' ').map(n => n[0]).join('')}
                             </div>
                             <div>
-                              <h4 className="text-xl font-bold text-gray-900">{candidate.name}</h4>
-                              <p className="text-sm text-gray-600 flex items-center mt-1">
-                                <StarIcon className="w-4 h-4 mr-1 text-yellow-500" />
+                              <h4 className="text-lg font-bold text-gray-900">{candidate.name}</h4>
+                              <p className="text-sm text-gray-600 flex items-center">
+                                <StarIcon className="w-3 h-3 mr-1 text-yellow-500" />
                                 {candidate.experience} experience
                               </p>
                             </div>
                           </div>
-                          <div className={`text-right p-4 rounded-xl border-2 ${getScoreColor(candidate.score)}`}>
-                            <div className="text-3xl font-bold">{candidate.score}%</div>
-                            <div className="text-sm font-semibold">Match Score</div>
+                          <div className={`text-center p-3 rounded-lg border-2 ${getScoreColor(candidate.score)}`}>
+                            <div className="text-2xl font-bold">{candidate.score}%</div>
+                            <div className="text-xs font-semibold">Match</div>
                           </div>
                         </div>
 
-                        <div className="mb-8">
-                          <h5 className="text-sm font-bold text-gray-700 mb-4 flex items-center">
-                            <div className="w-2 h-2 bg-blue-500 rounded-full mr-2"></div>
+                        <div className="mb-4">
+                          <h5 className="text-xs font-bold text-gray-700 mb-2 flex items-center">
+                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full mr-2"></div>
                             Key Skills
                           </h5>
-                          <div className="flex flex-wrap gap-3">
+                          <div className="flex flex-wrap gap-2">
                             {candidate.skills.map((skill, skillIndex) => (
-                              <span key={skillIndex} className="px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 text-sm rounded-xl font-semibold border border-blue-200 hover:shadow-md transition-shadow">
+                              <span key={skillIndex} className="px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 text-xs rounded-lg font-medium border border-blue-200">
                                 {skill}
                               </span>
                             ))}
@@ -110,7 +110,7 @@ export const ResumeResults: React.FC = () => {
                         </div>
 
                         <div className="flex justify-end">
-                          <button className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-semibold shadow-lg hover:shadow-xl transform hover:-translate-y-0.5">
+                          <button className="px-6 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-medium shadow-md hover:shadow-lg text-sm">
                             Send Interview Link
                           </button>
                         </div>
