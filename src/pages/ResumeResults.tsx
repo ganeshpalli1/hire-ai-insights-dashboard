@@ -1,8 +1,12 @@
 
 import React, { useState } from 'react';
 import { PageHeader } from '../components/PageHeader';
-import { ChevronDownIcon, ChevronRightIcon, UsersIcon, StarIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, ChevronRightIcon, UsersIcon, StarIcon, BriefcaseIcon } from '@heroicons/react/24/outline';
 import { useJobs } from '../contexts/JobContext';
+import { Card, CardContent } from '../components/ui/card';
+import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
+import { Avatar, AvatarFallback } from '../components/ui/avatar';
 
 const mockCandidates = [
   { name: 'John Doe', score: 92, skills: ['React', 'TypeScript', 'Node.js'], experience: '5 years' },
@@ -15,10 +19,17 @@ export const ResumeResults: React.FC = () => {
   const { jobs } = useJobs();
 
   const getScoreColor = (score: number) => {
-    if (score >= 90) return 'text-green-600 bg-green-50 border-green-200';
-    if (score >= 80) return 'text-blue-600 bg-blue-50 border-blue-200';
-    if (score >= 70) return 'text-orange-600 bg-orange-50 border-orange-200';
-    return 'text-red-600 bg-red-50 border-red-200';
+    if (score >= 90) return 'text-emerald-700 bg-emerald-50 border-emerald-200';
+    if (score >= 80) return 'text-blue-700 bg-blue-50 border-blue-200';
+    if (score >= 70) return 'text-amber-700 bg-amber-50 border-amber-200';
+    return 'text-red-700 bg-red-50 border-red-200';
+  };
+
+  const getScoreBadgeColor = (score: number) => {
+    if (score >= 90) return 'bg-emerald-500';
+    if (score >= 80) return 'bg-blue-500';
+    if (score >= 70) return 'bg-amber-500';
+    return 'bg-red-500';
   };
 
   return (
@@ -28,26 +39,26 @@ export const ResumeResults: React.FC = () => {
         subtitle="AI-analyzed candidates ranked by job fit"
       />
       
-      <div className="p-6 max-w-7xl mx-auto space-y-6">
+      <div className="p-6 max-w-6xl mx-auto space-y-6">
         {jobs.length === 0 ? (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
+          <Card className="p-12 text-center">
             <div className="max-w-md mx-auto">
-              <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
                 <UsersIcon className="w-8 h-8 text-gray-400" />
               </div>
-              <h3 className="text-lg font-medium text-gray-900 mb-2">No resume results yet</h3>
-              <p className="text-gray-600">Create job posts and upload resumes to see candidate analysis here.</p>
+              <h3 className="text-xl font-semibold text-gray-900 mb-3">No resume results yet</h3>
+              <p className="text-gray-600 leading-relaxed">Create job posts and upload resumes to see candidate analysis here.</p>
             </div>
-          </div>
+          </Card>
         ) : (
           jobs.map((job) => (
-            <div key={job.id} className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden hover:shadow-xl transition-all duration-300">
+            <Card key={job.id} className="overflow-hidden hover:shadow-lg transition-all duration-300 border-0 shadow-sm">
               <button
                 onClick={() => setExpandedJob(expandedJob === job.id ? null : job.id)}
-                className="w-full px-8 py-6 flex items-center justify-between hover:bg-gray-50 transition-colors"
+                className="w-full p-6 flex items-center justify-between hover:bg-gray-50/50 transition-colors"
               >
                 <div className="flex items-center space-x-4">
-                  <div className="p-2 bg-blue-100 rounded-lg">
+                  <div className="p-2.5 bg-blue-50 rounded-xl border border-blue-100">
                     {expandedJob === job.id ? (
                       <ChevronDownIcon className="w-5 h-5 text-blue-600" />
                     ) : (
@@ -55,71 +66,88 @@ export const ResumeResults: React.FC = () => {
                     )}
                   </div>
                   <div className="text-left">
-                    <h3 className="text-xl font-bold text-gray-900">{job.role}</h3>
-                    <p className="text-sm text-gray-500 mt-1">{job.experience} • Created {job.dateCreated}</p>
+                    <h3 className="text-lg font-semibold text-gray-900 mb-1">{job.role}</h3>
+                    <div className="flex items-center text-sm text-gray-500 space-x-3">
+                      <span className="flex items-center">
+                        <BriefcaseIcon className="w-4 h-4 mr-1" />
+                        {job.experience}
+                      </span>
+                      <span>•</span>
+                      <span>Created {job.dateCreated}</span>
+                    </div>
                   </div>
                 </div>
                 <div className="flex items-center space-x-4">
-                  <div className="px-5 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white text-sm font-semibold rounded-full shadow-sm">
+                  <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200 px-4 py-2 font-medium">
                     {mockCandidates.length} candidates analyzed
-                  </div>
-                  <span className={`px-4 py-2 text-xs font-bold rounded-full ${
-                    job.status === 'Active' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-yellow-100 text-yellow-700 border border-yellow-200'
-                  }`}>
+                  </Badge>
+                  <Badge className={`${
+                    job.status === 'Active' 
+                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
+                      : 'bg-amber-50 text-amber-700 border-amber-200'
+                  } border`}>
                     {job.status}
-                  </span>
+                  </Badge>
                 </div>
               </button>
 
               {expandedJob === job.id && (
-                <div className="px-8 pb-6 border-t border-gray-100 bg-gradient-to-b from-gray-50 to-white">
-                  <div className="pt-4 space-y-4">
+                <div className="border-t border-gray-100 bg-gray-50/30">
+                  <CardContent className="p-6 space-y-4">
                     {mockCandidates.map((candidate, index) => (
-                      <div key={index} className="bg-white border border-gray-200 rounded-xl p-6 hover:shadow-md transition-all duration-300 hover:border-blue-200">
-                        <div className="flex items-start justify-between mb-4">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-10 h-10 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center text-white font-bold text-sm">
-                              {candidate.name.split(' ').map(n => n[0]).join('')}
+                      <Card key={index} className="bg-white border-0 shadow-sm hover:shadow-md transition-all duration-200">
+                        <CardContent className="p-5">
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="flex items-center space-x-3">
+                              <Avatar className="h-11 w-11">
+                                <AvatarFallback className="bg-gradient-to-br from-blue-500 to-blue-600 text-white font-semibold text-sm">
+                                  {candidate.name.split(' ').map(n => n[0]).join('')}
+                                </AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <h4 className="font-semibold text-gray-900 text-lg">{candidate.name}</h4>
+                                <p className="text-sm text-gray-600 flex items-center mt-1">
+                                  <StarIcon className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                                  {candidate.experience} experience
+                                </p>
+                              </div>
                             </div>
-                            <div>
-                              <h4 className="text-lg font-bold text-gray-900">{candidate.name}</h4>
-                              <p className="text-sm text-gray-600 flex items-center">
-                                <StarIcon className="w-3 h-3 mr-1 text-yellow-500" />
-                                {candidate.experience} experience
-                              </p>
+                            <div className="text-center">
+                              <div className={`inline-flex items-center justify-center w-16 h-16 rounded-2xl border-2 ${getScoreColor(candidate.score)}`}>
+                                <div>
+                                  <div className="text-xl font-bold">{candidate.score}%</div>
+                                  <div className="text-xs font-medium -mt-1">Match</div>
+                                </div>
+                              </div>
                             </div>
                           </div>
-                          <div className={`text-center p-3 rounded-lg border-2 ${getScoreColor(candidate.score)}`}>
-                            <div className="text-2xl font-bold">{candidate.score}%</div>
-                            <div className="text-xs font-semibold">Match</div>
-                          </div>
-                        </div>
 
-                        <div className="mb-4">
-                          <h5 className="text-xs font-bold text-gray-700 mb-2 flex items-center">
-                            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full mr-2"></div>
-                            Key Skills
-                          </h5>
-                          <div className="flex flex-wrap gap-2">
-                            {candidate.skills.map((skill, skillIndex) => (
-                              <span key={skillIndex} className="px-3 py-1 bg-gradient-to-r from-blue-50 to-indigo-50 text-blue-700 text-xs rounded-lg font-medium border border-blue-200">
-                                {skill}
-                              </span>
-                            ))}
+                          <div className="mb-5">
+                            <div className="flex items-center mb-3">
+                              <div className={`w-2 h-2 rounded-full mr-2 ${getScoreBadgeColor(candidate.score)}`}></div>
+                              <h5 className="text-sm font-semibold text-gray-700">Key Skills</h5>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {candidate.skills.map((skill, skillIndex) => (
+                                <Badge key={skillIndex} variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200 px-3 py-1 text-xs font-medium">
+                                  {skill}
+                                </Badge>
+                              ))}
+                            </div>
                           </div>
-                        </div>
 
-                        <div className="flex justify-end">
-                          <button className="px-6 py-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg hover:from-blue-700 hover:to-blue-800 transition-all duration-200 font-medium shadow-md hover:shadow-lg text-sm">
-                            Send Interview Link
-                          </button>
-                        </div>
-                      </div>
+                          <div className="flex justify-end pt-2">
+                            <Button className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg font-medium shadow-sm">
+                              Send Interview Link
+                            </Button>
+                          </div>
+                        </CardContent>
+                      </Card>
                     ))}
-                  </div>
+                  </CardContent>
                 </div>
               )}
-            </div>
+            </Card>
           ))
         )}
       </div>
