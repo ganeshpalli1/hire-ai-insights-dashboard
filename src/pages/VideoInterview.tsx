@@ -44,7 +44,6 @@ export const VideoInterview: React.FC = () => {
   const [analysisRunning, setAnalysisRunning] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [isConversationReady, setIsConversationReady] = useState(false);
   
   // Fullscreen and anti-cheating state
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -53,11 +52,6 @@ export const VideoInterview: React.FC = () => {
   const [cheatingFlags, setCheatingFlags] = useState<string[]>([]);
   const [warningTimer, setWarningTimer] = useState(180); // 3 minutes in seconds
   const [warningTimerActive, setWarningTimerActive] = useState(false);
-  
-  // Add state for managing autoplay permissions and user interaction
-  const [hasUserInteracted, setHasUserInteracted] = useState(false);
-  const [videoCanAutoplay, setVideoCanAutoplay] = useState(false);
-  const [autoplaySupported, setAutoplaySupported] = useState('unknown');
   
   const navigate = useNavigate();
 
@@ -230,11 +224,10 @@ export const VideoInterview: React.FC = () => {
       
       // Set up video properties first
       video.preload = 'metadata';
-      video.muted = true; // Always muted for autoplay compliance
+      video.muted = true;
       video.loop = true;
       video.playsInline = true;
-      video.autoplay = false; // Don't use HTML autoplay attribute
-      video.currentTime = 0; // Start from beginning
+      video.autoplay = false; // Don't autoplay until we explicitly call play
       
       // Add event listeners for debugging
       video.addEventListener('loadstart', () => {
@@ -250,24 +243,14 @@ export const VideoInterview: React.FC = () => {
       video.addEventListener('loadeddata', () => {
         console.log('AI Video: Data loaded');
         updateVideoStatus('Data loaded');
-        // Ensure video is paused and ready
-        video.pause();
-        video.currentTime = 0;
-        updateVideoStatus('Ready for sync');
       });
       video.addEventListener('canplay', () => {
         console.log('AI Video: Can play');
         updateVideoStatus('Ready');
-        // Ensure video is paused and ready
-        video.pause();
-        video.currentTime = 0;
       });
       video.addEventListener('canplaythrough', () => {
         console.log('AI Video: Can play through');
         updateVideoStatus('Ready to play');
-        // Ensure video is paused and ready
-        video.pause();
-        video.currentTime = 0;
       });
       video.addEventListener('playing', () => {
         console.log('AI Video: Playing');
@@ -316,47 +299,25 @@ export const VideoInterview: React.FC = () => {
           // Use the Azure Blob Storage URL for the AI avatar video
           const aiAvatarVideoUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
           
-          console.log('🎬 Loading AI Avatar video from Azure Blob Storage...');
+          console.log('Loading AI Avatar video from Azure Blob Storage...');
           updateVideoStatus('Loading AI Avatar...');
           
-          // Test video accessibility first
-          const response = await fetch(aiAvatarVideoUrl, { method: 'HEAD' });
-          console.log('🌐 Video accessibility check:', response.status, response.statusText);
+          // Set the video source directly to the blob URL
+          video.src = aiAvatarVideoUrl;
+          video.load();
           
-          if (response.ok) {
-            // Set the video source directly to the blob URL
-            video.src = aiAvatarVideoUrl;
-            video.load();
-            
-            console.log('✅ Video source set to:', aiAvatarVideoUrl);
-            
-            // Add a listener to confirm when video is ready
-            video.addEventListener('loadeddata', () => {
-              console.log('🎬 Video data loaded - ready for synchronization');
-              updateVideoStatus('Ready for sync');
-            }, { once: true });
-            
-          } else {
-            throw new Error(`Video not accessible: ${response.status}`);
-          }
+          console.log('Video source set to:', aiAvatarVideoUrl);
           
         } catch (error) {
           console.error('❌ Failed to set up video:', error);
           updateVideoStatus('Setup failed');
           
-          // Try fallback with local video
-          console.log('🔄 Trying fallback local video...');
-          video.src = '/ai-avatar.mp4';
-          video.load();
-          
-          video.addEventListener('error', () => {
-            // Show fallback content if both sources fail
-            const fallback = document.getElementById('ai-avatar-fallback');
-            if (fallback) {
-              fallback.style.display = 'flex';
-              video.style.display = 'none';
-            }
-          }, { once: true });
+          // Show fallback immediately
+          const fallback = document.getElementById('ai-avatar-fallback');
+          if (fallback) {
+            fallback.style.display = 'flex';
+            video.style.display = 'none';
+          }
         }
       };
       
@@ -364,20 +325,84 @@ export const VideoInterview: React.FC = () => {
     }
   }, []);
 
-  // Control AI avatar video state when interview ends
+  // Control AI avatar video playback with better error handling
   useEffect(() => {
-    if (aiVideoRef.current && !interviewStarted) {
+    if (aiVideoRef.current) {
       const video = aiVideoRef.current;
       
-      console.log('AI Video: Interview ended, resetting video');
-      video.pause();
-      video.currentTime = 0;
-      
-      // Hide fallback and show video element
-      const fallback = document.getElementById('ai-avatar-fallback');
-      if (fallback) {
-        fallback.style.display = 'none';
-        video.style.display = 'block';
+      if (interviewStarted) {
+        console.log('AI Video: Starting interview, attempting to play video');
+        
+        const playVideo = async () => {
+          try {
+            // Check if video is ready
+            if (video.readyState < 2) { // HAVE_CURRENT_DATA
+              console.log('AI Video: Waiting for video to be ready...');
+              
+              // Wait for video to be ready or timeout
+              await new Promise((resolve) => {
+                const onReady = () => {
+                  console.log('AI Video: Video is now ready');
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
+                  resolve(true);
+                };
+                
+                video.addEventListener('canplay', onReady);
+                video.addEventListener('loadeddata', onReady);
+                
+                // Timeout after 5 seconds
+                setTimeout(() => {
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
+                  resolve(false);
+                }, 5000);
+              });
+            }
+            
+            // Ensure video properties are set
+            video.muted = true;
+            video.loop = true;
+            video.volume = 0;
+            
+            // Try to play
+            console.log('AI Video: Attempting to play...');
+            await video.play();
+            console.log('✅ AI Video: Successfully started playing');
+            
+          } catch (error) {
+            console.error('❌ AI Video: Failed to play:', error);
+            
+            // Show fallback content
+            const fallback = document.getElementById('ai-avatar-fallback');
+            if (fallback) {
+              fallback.style.display = 'flex';
+              console.log('Showing fallback content due to play failure');
+            }
+            
+            // Try again after user interaction
+            setTimeout(() => {
+              console.log('AI Video: Retrying play after delay...');
+              video.play().catch(retryError => {
+                console.error('AI Video: Retry also failed:', retryError);
+              });
+            }, 1000);
+          }
+        };
+        
+        playVideo();
+        
+      } else {
+        console.log('AI Video: Interview ended, pausing video');
+        video.pause();
+        video.currentTime = 0;
+        
+        // Hide fallback and show video element
+        const fallback = document.getElementById('ai-avatar-fallback');
+        if (fallback) {
+          fallback.style.display = 'none';
+          video.style.display = 'block';
+        }
       }
     }
   }, [interviewStarted]);
@@ -390,72 +415,7 @@ export const VideoInterview: React.FC = () => {
     if (sessionId) {
       loadInterviewSession(sessionId);
     }
-    
-    // Check autoplay policy support
-    checkAutoplaySupport();
-    
-    // Add global click listener to detect user interaction
-    const handleUserInteraction = () => {
-      console.log('👆 User interaction detected - enabling video autoplay');
-      setHasUserInteracted(true);
-      
-      // Remove listener after first interaction
-      document.removeEventListener('click', handleUserInteraction);
-      document.removeEventListener('touchstart', handleUserInteraction);
-      document.removeEventListener('keydown', handleUserInteraction);
-    };
-    
-    document.addEventListener('click', handleUserInteraction);
-    document.addEventListener('touchstart', handleUserInteraction);
-    document.addEventListener('keydown', handleUserInteraction);
-    
-    return () => {
-      document.removeEventListener('click', handleUserInteraction);
-      document.removeEventListener('touchstart', handleUserInteraction);
-      document.removeEventListener('keydown', handleUserInteraction);
-    };
   }, []);
-
-  // Function to check autoplay policy
-  const checkAutoplaySupport = async () => {
-    try {
-      if ('getAutoplayPolicy' in navigator) {
-        const policy = (navigator as any).getAutoplayPolicy('mediaelement');
-        console.log('🎬 Autoplay policy:', policy);
-        setAutoplaySupported(policy);
-        setVideoCanAutoplay(policy === 'allowed' || policy === 'allowed-muted');
-      } else {
-        console.log('🎬 getAutoplayPolicy not supported, testing with video element');
-        await testVideoAutoplay();
-      }
-    } catch (error) {
-      console.error('❌ Error checking autoplay support:', error);
-      setAutoplaySupported('disallowed');
-      setVideoCanAutoplay(false);
-    }
-  };
-
-  // Fallback autoplay test
-  const testVideoAutoplay = async () => {
-    try {
-      const testVideo = document.createElement('video');
-      testVideo.muted = true;
-      testVideo.autoplay = true;
-      testVideo.src = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMWF2YzFtcDQxAAAACGZyZWUAAAAAAAAAAmEbEwAACXxtZGF0AAACrgYF//+q3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE0OCByMjc0OCA5OTE4MDk2IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAxNiAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFjPTEgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTMgbG9va2FoZWFkX3RocmVhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz0zIGJfcHlyYW1pZD0yIGJfYWRhcHQ9MSBiX2JpYXM9MCBkaXJlY3Q9MSB3ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWlnaHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NDAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAAASGWIhAA3//72hEfLgAACALAY/////g==';
-      
-      const playPromise = testVideo.play();
-      if (playPromise) {
-        await playPromise;
-        console.log('✅ Video autoplay test passed');
-        setAutoplaySupported('allowed-muted');
-        setVideoCanAutoplay(true);
-      }
-    } catch (error) {
-      console.log('❌ Video autoplay test failed:', error);
-      setAutoplaySupported('disallowed');
-      setVideoCanAutoplay(false);
-    }
-  };
 
   const loadInterviewSession = async (sessionId: string) => {
     setLoadingSession(true);
@@ -514,22 +474,14 @@ export const VideoInterview: React.FC = () => {
 
   // Initialize conversation with ElevenLabs
   const conversation = useConversation({
-      onConnect: () => {
-    console.log('Connected to ElevenLabs');
-    setError('');
-    setIsConversationReady(true);
+    onConnect: () => {
+      console.log('Connected to ElevenLabs');
+      setError('');
+    },
     
-    // Ensure video is paused on initial connection
-    if (aiVideoRef.current) {
-      aiVideoRef.current.pause();
-      aiVideoRef.current.currentTime = 0;
-    }
-  },
-    
-      onDisconnect: () => {
-    console.log('Disconnected from ElevenLabs');
-    setIsConversationReady(false);
-  },
+    onDisconnect: () => {
+      console.log('Disconnected from ElevenLabs');
+    },
     
     onMessage: (message) => {
       handleMessage(message);
@@ -539,104 +491,6 @@ export const VideoInterview: React.FC = () => {
       console.error('Conversation error:', error);
       setError('An error occurred with the AI interviewer. Please check your connection and try again.');
     },
-    
-      onModeChange: (mode) => {
-    console.log('🎤 ElevenLabs Mode changed:', mode);
-    console.log('🎯 Current states:', { 
-      interviewStarted, 
-      isConversationReady, 
-      hasUserInteracted,
-      videoCanAutoplay,
-      autoplaySupported,
-      videoReadyState: aiVideoRef.current?.readyState,
-      videoSrc: aiVideoRef.current?.src 
-    });
-    
-    // Update agent status in UI immediately
-    const agentStatusElement = document.getElementById('agent-status');
-    if (agentStatusElement) {
-      agentStatusElement.textContent = mode.mode === 'speaking' ? 'speaking' : 'listening';
-      console.log(`📱 Updated UI status to: ${mode.mode}`);
-    }
-    
-    // Control AI avatar video based on speaking mode
-    if (aiVideoRef.current && interviewStarted) {
-      const video = aiVideoRef.current;
-      
-      if (mode.mode === 'speaking') {
-        // ElevenLabs is speaking - attempt to play the video
-        console.log('🗣️ AI is speaking - attempting to play video');
-        
-        // Check if we can play the video
-        const canPlayVideo = hasUserInteracted || videoCanAutoplay || autoplaySupported === 'allowed-muted';
-        
-        if (canPlayVideo) {
-          const playVideo = async () => {
-            try {
-              // Ensure video properties for autoplay compliance
-              video.muted = true;
-              video.loop = true;
-              
-              console.log('🎬 Video play attempt - readyState:', video.readyState);
-              console.log('🎬 Video src:', video.src);
-              console.log('🎬 Video duration:', video.duration);
-              console.log('🎬 Can play video:', canPlayVideo);
-              
-              await video.play();
-              console.log('✅ Video is now playing!');
-              
-              // Visual feedback
-              video.style.opacity = '1';
-              
-            } catch (err) {
-              console.error('❌ Failed to play video during speaking:', err);
-              
-              // Show user interaction prompt if needed
-              if (!hasUserInteracted) {
-                console.log('💡 Video autoplay blocked - user interaction required');
-                showUserInteractionPrompt();
-              }
-              
-              // Try to reload video source if needed
-              if (!video.src || video.src.includes('blob:')) {
-                console.log('🔄 Attempting to reload video source...');
-                video.src = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
-                video.load();
-                
-                video.addEventListener('canplay', () => {
-                  if (hasUserInteracted) {
-                    video.play().catch(retryErr => {
-                      console.error('❌ Retry play failed:', retryErr);
-                    });
-                  }
-                }, { once: true });
-              }
-            }
-          };
-          
-          // Call play function
-          playVideo();
-        } else {
-          console.log('⚠️ Cannot play video - no user interaction or autoplay permission');
-          showUserInteractionPrompt();
-        }
-        
-      } else if (mode.mode === 'listening') {
-        // ElevenLabs is listening - pause the video
-        console.log('👂 AI is listening - pausing video');
-        video.pause();
-        console.log('⏸️ Video paused');
-        
-        // Visual feedback
-        video.style.opacity = '0.8';
-      }
-    } else {
-      console.log('⚠️ Cannot control video:', {
-        hasVideoRef: !!aiVideoRef.current,
-        interviewStarted
-      });
-    }
-  },
     
     clientTools: {
       saveKeyPoint: (parameters: { category: string; point: string; importance: 'high' | 'medium' | 'low' }) => {
@@ -846,41 +700,6 @@ export const VideoInterview: React.FC = () => {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
-  // Function to show user interaction prompt for video autoplay
-  const showUserInteractionPrompt = () => {
-    const promptElement = document.getElementById('video-interaction-prompt');
-    if (promptElement) {
-      promptElement.style.display = 'flex';
-      console.log('📱 Showing user interaction prompt for video');
-    }
-  };
-
-  // Function to enable video after user interaction
-  const enableVideoAutoplay = () => {
-    console.log('✅ User enabled video autoplay');
-    setHasUserInteracted(true);
-    
-    // Hide the prompt
-    const promptElement = document.getElementById('video-interaction-prompt');
-    if (promptElement) {
-      promptElement.style.display = 'none';
-    }
-    
-    // If AI is currently speaking, try to play the video
-    const agentStatusElement = document.getElementById('agent-status');
-    if (agentStatusElement && agentStatusElement.textContent === 'speaking') {
-      if (aiVideoRef.current) {
-        aiVideoRef.current.play().catch(err => {
-          console.error('❌ Failed to play video after user interaction:', err);
-        });
-      }
-    }
-    
-    toast.success('🎬 Video autoplay enabled!', {
-      description: 'The AI avatar will now sync with voice.',
-    });
-  };
-
   // Start interview with AI
   const startInterview = async () => {
     try {
@@ -964,15 +783,6 @@ export const VideoInterview: React.FC = () => {
       toast.success('Interview started in secure fullscreen mode', {
         description: 'Do not exit fullscreen or switch tabs during the interview.',
       });
-      
-      // Show autoplay info if needed
-      if (!hasUserInteracted && (autoplaySupported === 'disallowed' || autoplaySupported === 'unknown')) {
-        setTimeout(() => {
-          toast.info('🎬 Video Avatar Sync', {
-            description: 'Click "Enable Video Sync" when prompted to see the AI avatar animate with speech.',
-          });
-        }, 2000);
-      }
       
       console.log('Interview started successfully!');
     } catch (err) {
@@ -1121,7 +931,6 @@ export const VideoInterview: React.FC = () => {
     setTranscript([]);
     setCurrentTranscript('');
     setConversationId(null);
-    setIsConversationReady(false);
     
     // Reset anti-cheating counters
     setFullscreenExitCount(0);
@@ -1346,7 +1155,6 @@ export const VideoInterview: React.FC = () => {
                   playsInline
                   muted
                   loop
-                  autoPlay={false}
                   style={{ display: 'block' }}
                 >
                   <source src="/ai-avatar.mp4" type="video/mp4" />
@@ -1372,26 +1180,8 @@ export const VideoInterview: React.FC = () => {
                 
                 {/* Video status overlay */}
                 <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded-full text-white text-sm">
-                  Video: <span id="video-status">Loading...</span>
-                  {interviewStarted && (
-                    <span className="ml-2">
-                      | Conv: {isConversationReady ? '✅' : '⏳'}
-                      | Auto: {hasUserInteracted ? '✅' : (autoplaySupported === 'allowed' || autoplaySupported === 'allowed-muted') ? '🔇' : '❌'}
-                    </span>
-                  )}
+                  Video Status: <span id="video-status">Loading...</span>
                 </div>
-                
-                {/* Agent status indicator */}
-                {interviewStarted && (
-                  <div className="absolute top-4 right-4 flex items-center gap-2 bg-black/50 px-3 py-1 rounded-full">
-                    <div className={`w-3 h-3 rounded-full animate-pulse`} style={{
-                      backgroundColor: '#10b981'
-                    }}></div>
-                    <span id="agent-status" className="text-sm text-white">
-                      listening
-                    </span>
-                  </div>
-                )}
                 
                 {/* Interview status overlay */}
                 {!interviewStarted && (
@@ -1405,43 +1195,6 @@ export const VideoInterview: React.FC = () => {
                     </div>
                   </div>
                 )}
-                
-                {/* User interaction prompt for video autoplay */}
-                <div 
-                  id="video-interaction-prompt"
-                  className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-lg"
-                  style={{ display: 'none' }}
-                >
-                  <div className="text-center text-white max-w-sm mx-auto p-6">
-                    <div className="w-16 h-16 rounded-full bg-blue-500/20 flex items-center justify-center mx-auto mb-4">
-                      <span className="text-2xl">🎬</span>
-                    </div>
-                    <h3 className="text-lg font-semibold mb-2">Enable Video Sync</h3>
-                    <p className="text-sm text-white/80 mb-4">
-                      To see the AI avatar animated with speech, please allow video autoplay
-                    </p>
-                    <div className="space-y-2">
-                      <button
-                        onClick={enableVideoAutoplay}
-                        className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
-                      >
-                        Enable Video Sync
-                      </button>
-                      <button
-                        onClick={() => {
-                          const promptElement = document.getElementById('video-interaction-prompt');
-                          if (promptElement) promptElement.style.display = 'none';
-                        }}
-                        className="w-full px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white font-medium rounded-lg transition-colors"
-                      >
-                        Continue without Video
-                      </button>
-                    </div>
-                    <p className="text-xs text-white/60 mt-3">
-                      This is required due to browser autoplay policies
-                    </p>
-                  </div>
-                </div>
               </CardContent>
             </Card>
             
@@ -1493,74 +1246,29 @@ export const VideoInterview: React.FC = () => {
                       console.log('Video readyState:', video.readyState);
                       console.log('Video networkState:', video.networkState);
                       
-                      try {
-                        // Test video accessibility from Azure Blob Storage
-                        const blobUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
-                        console.log('Testing Azure Blob Storage video:', blobUrl);
-                        
-                        const response = await fetch(blobUrl, { method: 'HEAD' });
-                        console.log('✅ Video accessibility test:', response.status, response.statusText);
-                        console.log('Content-Type:', response.headers.get('content-type'));
-                        console.log('Content-Length:', response.headers.get('content-length'));
-                        
-                        // Set video source and try to play
-                        video.src = blobUrl;
-                        video.muted = true;
-                        await video.play();
-                        console.log('✅ Manual video play successful from Azure Blob Storage');
-                      } catch (error) {
-                        console.error('❌ Manual video test failed:', error);
-                      }
+                                              try {
+                          // Test video accessibility from Azure Blob Storage
+                          const blobUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
+                          console.log('Testing Azure Blob Storage video:', blobUrl);
+                          
+                          const response = await fetch(blobUrl, { method: 'HEAD' });
+                          console.log('✅ Video accessibility test:', response.status, response.statusText);
+                          console.log('Content-Type:', response.headers.get('content-type'));
+                          console.log('Content-Length:', response.headers.get('content-length'));
+                          
+                          // Set video source and try to play
+                          video.src = blobUrl;
+                          video.muted = true;
+                          await video.play();
+                          console.log('✅ Manual video play successful from Azure Blob Storage');
+                        } catch (error) {
+                          console.error('❌ Manual video test failed:', error);
+                        }
                     }
                   }}
                   className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-md transition-colors"
                 >
                   Test Video
-                </Button>
-                <Button 
-                  onClick={() => {
-                    // Manually trigger speaking mode for testing
-                    console.log('🧪 Manual speaking mode test');
-                    const agentStatusElement = document.getElementById('agent-status');
-                    if (agentStatusElement) {
-                      agentStatusElement.textContent = 'speaking';
-                    }
-                    
-                    if (aiVideoRef.current) {
-                      const video = aiVideoRef.current;
-                      video.muted = true;
-                      video.loop = true;
-                      video.play().then(() => {
-                        console.log('✅ Manual speaking mode - video playing');
-                        video.style.opacity = '1';
-                        
-                        // Auto switch back to listening after 3 seconds
-                        setTimeout(() => {
-                          video.pause();
-                          video.style.opacity = '0.8';
-                          if (agentStatusElement) {
-                            agentStatusElement.textContent = 'listening';
-                          }
-                          console.log('⏸️ Manual test - switched back to listening');
-                        }, 3000);
-                      }).catch(err => {
-                        console.error('❌ Manual speaking mode failed:', err);
-                        showUserInteractionPrompt();
-                      });
-                    }
-                  }}
-                  className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-sm rounded-md transition-colors"
-                >
-                  Test Sync
-                </Button>
-                <Button 
-                  onClick={() => {
-                    console.log('🧪 Testing autoplay prompt');
-                    showUserInteractionPrompt();
-                  }}
-                  className="px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-md transition-colors"
-                >
-                  Test Prompt
                 </Button>
               </div>
             </div>
