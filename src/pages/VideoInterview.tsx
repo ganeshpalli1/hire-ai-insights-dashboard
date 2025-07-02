@@ -356,7 +356,7 @@ export const VideoInterview: React.FC = () => {
         
         // Optionally update the session if we have one
         if (sessionData?.session_id) {
-          fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/interviews/${sessionData.session_id}/update-conversation`, {
+          fetch(`${import.meta.env.VITE_API_BASE_URL || 'https://backendb2b.azurewebsites.net'}/api/interviews/${sessionData.session_id}/update-conversation`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ conversation_id: msgConvId })
@@ -607,7 +607,7 @@ export const VideoInterview: React.FC = () => {
           const durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
           
           // Send transcript directly to backend
-          const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
+          const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'https://backendb2b.azurewebsites.net'}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
