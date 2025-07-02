@@ -478,19 +478,24 @@ export const VideoInterview: React.FC = () => {
       // Enter fullscreen mode for anti-cheating
       await enterFullscreen();
       
-      // Try to get signed URL from backend, fallback to agent ID if not available
+      // Get agent ID from environment or use demo
       const agentId = import.meta.env.VITE_ELEVENLABS_AGENT_ID || 'demo-agent-id';
       console.log('Using ElevenLabs Agent ID:', agentId);
       
+      // Check if we have a real agent ID (not demo)
+      if (agentId === 'demo-agent-id') {
+        throw new Error('Please configure VITE_ELEVENLABS_AGENT_ID environment variable with your real ElevenLabs agent ID. You can create an agent at https://elevenlabs.io/app/conversational-ai');
+      }
+      
       let sessionResponse: any;
       
+      // Try to get signed URL from backend first, then fallback to direct agent ID
       try {
         const response = await fetch(`/api/elevenlabs/signed-url?agentId=${agentId}`);
         
         if (response.ok) {
           const { signed_url } = await response.json();
           console.log('Got signed URL, starting session...');
-          // Start conversation with signed URL
           sessionResponse = await conversation.startSession({ signedUrl: signed_url });
         } else {
           throw new Error('Backend endpoint not available');
@@ -498,8 +503,14 @@ export const VideoInterview: React.FC = () => {
       } catch (backendError) {
         console.log('Backend not available, trying direct agent ID:', backendError);
         console.log('Attempting to start session with agent ID:', agentId);
+        
         // Fallback: try to start session directly with agent ID (for public agents)
-        sessionResponse = await conversation.startSession({ agentId: agentId });
+        try {
+          sessionResponse = await conversation.startSession({ agentId: agentId });
+        } catch (agentError) {
+          console.error('Direct agent connection failed:', agentError);
+          throw new Error(`Failed to connect to ElevenLabs agent. Please check that your agent ID "${agentId}" is correct and publicly accessible. Error: ${agentError.message}`);
+        }
       }
       
       // Log the entire session response to debug
@@ -550,9 +561,24 @@ export const VideoInterview: React.FC = () => {
       console.log('Interview started successfully!');
     } catch (err) {
       console.error('Failed to start interview:', err);
-      setError(`Failed to start interview: ${err.message}. Please check your ElevenLabs agent ID and API setup.`);
-      // For demo purposes, start basic interview mode
-      setInterviewStarted(true);
+      
+      // Provide specific error messages based on the error type
+      let errorMessage = 'Failed to start interview. ';
+      
+      if (err.message.includes('demo-agent-id')) {
+        errorMessage += 'Please configure your ElevenLabs Agent ID in the environment variables.';
+      } else if (err.message.includes('agent ID')) {
+        errorMessage += 'Please check your ElevenLabs Agent ID configuration.';
+      } else {
+        errorMessage += err.message || 'Please check your ElevenLabs setup.';
+      }
+      
+      setError(errorMessage);
+      
+      // Don't start basic interview mode for production - require proper configuration
+      toast.error('ElevenLabs Configuration Required', {
+        description: 'Please configure your ElevenLabs Agent ID to enable AI interviews.',
+      });
     }
   };
 
