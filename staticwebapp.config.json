@@ -1,14 +1,40 @@
 {
   "navigationFallback": {
     "rewrite": "/index.html",
-    "exclude": ["/images/*.{png,jpg,gif}", "/css/*", "/js/*", "/api/*", "/assets/*", "/favicon.ico", "/robots.txt"]
+    "exclude": [
+      "/images/*.{png,jpg,jpeg,gif,svg}",
+      "/css/*",
+      "/js/*", 
+      "/api/*",
+      "/assets/*",
+      "/favicon.ico",
+      "/robots.txt",
+      "/*.mp4",
+      "/*.avi",
+      "/*.mov",
+      "/*.webm",
+      "/*.ogg",
+      "/ai-avatar.mp4"
+    ]
   },
   "mimeTypes": {
-    ".json": "application/json"
+    ".json": "application/json",
+    ".mp4": "video/mp4",
+    ".avi": "video/x-msvideo",
+    ".mov": "video/quicktime",
+    ".webm": "video/webm",
+    ".ogg": "video/ogg"
   },
   "globalHeaders": {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    "X-XSS-Protection": "1; mode=block"
-  }
+    "X-XSS-Protection": "1; mode=block",
+    "cache-control": "no-cache"
+  },
+  "routes": [
+    {
+      "route": "/ai-avatar.mp4",
+      "allowedRoles": ["anonymous"]
+    }
+  ]
 } 
