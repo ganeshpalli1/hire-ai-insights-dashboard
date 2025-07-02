@@ -203,7 +203,27 @@ export const VideoInterview: React.FC = () => {
     };
   }, [warningTimerActive, warningTimer]);
 
-  // Load interview session if session ID is provided in URL
+  // Initialize AI avatar video
+  useEffect(() => {
+    if (aiVideoRef.current) {
+      aiVideoRef.current.src = '/ai-avatar.mp4';
+      aiVideoRef.current.load();
+    }
+  }, []);
+
+  // Control AI avatar video playback
+  useEffect(() => {
+    if (aiVideoRef.current) {
+      if (interviewStarted) {
+        aiVideoRef.current.play().catch(console.error);
+      } else {
+        aiVideoRef.current.pause();
+        aiVideoRef.current.currentTime = 0;
+      }
+    }
+  }, [interviewStarted]);
+
+  // Get session ID from URL on component mount
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const sessionId = urlParams.get('session');
@@ -438,22 +458,6 @@ export const VideoInterview: React.FC = () => {
       videoRef.current.srcObject = cameraStream;
     }
   }, [cameraStream]);
-
-  // Control AI avatar video playback based on speaking status
-  useEffect(() => {
-    if (aiVideoRef.current) {
-      // Set video source
-      aiVideoRef.current.src = "/0426update.mp4";
-      
-      if (conversation.isSpeaking) {
-        // AI is speaking - play the video
-        aiVideoRef.current.play().catch(err => console.log('Video play error:', err));
-      } else {
-        // AI is not speaking - pause the video
-        aiVideoRef.current.pause();
-      }
-    }
-  }, [conversation.isSpeaking]);
 
   // Timer formatting
   const formatTime = (seconds: number) => {
@@ -914,7 +918,26 @@ export const VideoInterview: React.FC = () => {
           </div>
           {/* Right: AI Avatar video */}
           <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center min-h-[540px] max-w-[48%] relative" style={{ height: '540px' }}>
-            <video ref={aiVideoRef} loop muted className="w-full h-full object-cover" />
+            {interviewStarted ? (
+              <video 
+                ref={aiVideoRef} 
+                loop 
+                muted 
+                autoPlay
+                className="w-full h-full object-cover"
+                poster="/placeholder.svg"
+              />
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
+                <div className="w-24 h-24 bg-gray-200 rounded-full mb-4 flex items-center justify-center">
+                  <svg className="w-12 h-12 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" />
+                  </svg>
+                </div>
+                <p className="text-lg">AI Interviewer</p>
+                <p className="text-sm">Will appear when interview starts</p>
+              </div>
+            )}
             {/* Volume control */}
             {interviewStarted && (
               <div className="absolute top-4 right-4 bg-white bg-opacity-90 p-3 rounded-lg shadow">
