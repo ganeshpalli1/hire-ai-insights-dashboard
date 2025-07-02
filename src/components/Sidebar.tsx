@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { 
@@ -7,13 +6,16 @@ import {
   UsersIcon, 
   ChatBubbleLeftRightIcon,
   ChevronLeftIcon,
-  ChevronRightIcon
+  ChevronRightIcon,
+  PlusIcon,
+  ChartBarIcon
 } from '@heroicons/react/24/outline';
 
 const menuItems = [
-  { id: 'new-job', label: 'New Job', icon: BriefcaseIcon, path: '/' },
-  { id: 'job-posts', label: 'All Job Posts', icon: DocumentTextIcon, path: '/job-posts' },
-  { id: 'resume-results', label: 'Resume Results', icon: UsersIcon, path: '/resume-results' },
+  { id: 'dashboard', label: 'Dashboard', icon: ChartBarIcon, path: '/dashboard' },
+  { id: 'new-job', label: 'New Job', icon: PlusIcon, path: '/new-job' },
+  { id: 'job-posts', label: 'All Job Posts', icon: BriefcaseIcon, path: '/job-posts' },
+  { id: 'resume-results', label: 'Resume Results', icon: DocumentTextIcon, path: '/resume-results' },
   { id: 'interview-results', label: 'Interview Results', icon: ChatBubbleLeftRightIcon, path: '/interview-results' },
 ];
 

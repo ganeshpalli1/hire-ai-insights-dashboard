@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
@@ -7,6 +6,7 @@ import { AIAnalysis } from '../components/AIAnalysis';
 import { InterviewConfig } from '../components/InterviewConfig';
 import { useJobs } from '../contexts/JobContext';
 import { toast } from 'sonner';
+import { JobDescriptionInput } from '../lib/api';
 
 const steps = [
   { id: 1, name: 'Job Details', description: 'Enter job requirements' },
@@ -21,16 +21,43 @@ export const NewJob: React.FC = () => {
     experience: '',
     description: '',
   });
-  const { addJob } = useJobs();
+  const [createdJobId, setCreatedJobId] = useState<string | null>(null);
+  const [isCreatingJob, setIsCreatingJob] = useState(false);
+  const { createJob } = useJobs();
   const navigate = useNavigate();
 
   const nextStep = () => setCurrentStep(Math.min(currentStep + 1, 3));
   const prevStep = () => setCurrentStep(Math.max(currentStep - 1, 1));
 
+  const handleJobDetailsNext = async () => {
+    if (!jobData.role || !jobData.experience || !jobData.description) {
+      toast.error('Please fill in all required fields');
+      return;
+    }
+
+    setIsCreatingJob(true);
+    try {
+      // Transform the data to match API structure
+      const apiJobData: JobDescriptionInput = {
+        job_role: jobData.role,
+        required_experience: jobData.experience,
+        description: jobData.description,
+      };
+
+      const jobId = await createJob(apiJobData);
+      setCreatedJobId(jobId);
+      nextStep();
+    } catch (error) {
+      console.error('Error creating job:', error);
+      toast.error('Failed to create job. Please try again.');
+    } finally {
+      setIsCreatingJob(false);
+    }
+  };
+
   const handleJobCreation = () => {
-    addJob(jobData);
-    toast.success('Job post created successfully!', {
-      description: `${jobData.role} has been added to your job posts.`,
+    toast.success('Job setup completed successfully!', {
+      description: `${jobData.role} is ready for candidate screening.`,
     });
     
     // Reset form and redirect
@@ -80,21 +107,39 @@ export const NewJob: React.FC = () => {
         {/* Step Content */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
           {currentStep === 1 && (
-            <JobDetailsForm
-              data={jobData}
-              onChange={setJobData}
-              onNext={nextStep}
-            />
+            <div>
+              <div className="mb-6">
+                <h3 className="text-xl font-semibold text-gray-900 mb-2">Job Details</h3>
+                <p className="text-gray-600">
+                  Provide comprehensive job information to enable accurate AI analysis and candidate matching.
+                </p>
+              </div>
+              <JobDetailsForm
+                data={jobData}
+                onChange={setJobData}
+                onNext={handleJobDetailsNext}
+              />
+              {isCreatingJob && (
+                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                  <div className="flex items-center">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                    <span className="ml-2 text-sm text-blue-700">Creating job and analyzing requirements...</span>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           {currentStep === 2 && (
             <AIAnalysis
               jobData={jobData}
+              jobId={createdJobId}
               onNext={nextStep}
               onPrev={prevStep}
             />
           )}
           {currentStep === 3 && (
             <InterviewConfig
+              jobId={createdJobId}
               onPrev={prevStep}
               onComplete={handleJobCreation}
             />

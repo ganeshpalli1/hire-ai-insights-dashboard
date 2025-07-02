@@ -1,5 +1,5 @@
-
 import React from 'react';
+import { JobDescriptionInput } from '../lib/api';
 
 interface JobDetailsFormProps {
   data: {
@@ -44,9 +44,9 @@ export const JobDetailsForm: React.FC<JobDetailsFormProps> = ({ data, onChange, 
           required
         >
           <option value="">Select experience level</option>
-          <option value="0-2">0-2 years (Entry Level)</option>
-          <option value="2-6">2-6 years (Mid Level)</option>
-          <option value="6+">6+ years (Senior Level)</option>
+          <option value="0-2 years">0-2 years (Entry Level)</option>
+          <option value="2-6 years">2-6 years (Mid Level)</option>
+          <option value="6+ years">6+ years (Senior Level)</option>
         </select>
       </div>
 
@@ -62,12 +62,16 @@ export const JobDetailsForm: React.FC<JobDetailsFormProps> = ({ data, onChange, 
           placeholder="Describe the role, responsibilities, requirements, and qualifications..."
           required
         />
+        <p className="text-sm text-gray-500 mt-1">
+          Provide a detailed description including required skills, experience, responsibilities, and qualifications.
+        </p>
       </div>
 
       <div className="flex justify-end">
         <button
           type="submit"
           className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+          disabled={!data.role || !data.experience || !data.description}
         >
           Continue to AI Analysis
         </button>
