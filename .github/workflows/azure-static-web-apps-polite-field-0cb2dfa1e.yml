@@ -51,6 +51,10 @@ jobs:
           ls -la src/lib/
           echo "=== src/contexts directory ==="
           ls -la src/contexts/
+          echo "=== Checking api.ts file ==="
+          head -n 20 src/lib/api.ts
+          echo "=== Checking JobContext.tsx imports ==="
+          head -n 20 src/contexts/JobContext.tsx
 
       - name: Build project
         run: npm run build
