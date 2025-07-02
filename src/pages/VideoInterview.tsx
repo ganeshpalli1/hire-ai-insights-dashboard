@@ -45,6 +45,12 @@ export const VideoInterview: React.FC = () => {
   const [showCompleted, setShowCompleted] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
   
+  // Audio state for video sync
+  const [isAgentSpeaking, setIsAgentSpeaking] = useState(false);
+  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
+  const [audioQueue, setAudioQueue] = useState<Array<{ audio: string; id: number }>>([]);
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  
   // Fullscreen and anti-cheating state
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [fullscreenExitCount, setFullscreenExitCount] = useState(0);
@@ -228,7 +234,6 @@ export const VideoInterview: React.FC = () => {
       video.loop = true;
       video.playsInline = true;
       video.autoplay = false; // Don't autoplay until we explicitly call play
-      video.crossOrigin = 'anonymous'; // Enable CORS for external videos
       
       // Add event listeners for debugging
       video.addEventListener('loadstart', () => {
@@ -326,87 +331,44 @@ export const VideoInterview: React.FC = () => {
     }
   }, []);
 
-  // Control AI avatar video playback with better error handling
+  // Control AI avatar video playback synced with audio
   useEffect(() => {
     if (aiVideoRef.current) {
       const video = aiVideoRef.current;
       
-      if (interviewStarted) {
-        console.log('AI Video: Starting interview, attempting to play video');
+      // Only play video when agent is speaking
+      if (isAgentSpeaking && interviewStarted) {
+        console.log('AI Video: Agent is speaking, playing video');
         
         const playVideo = async () => {
           try {
-            // Check if video is ready
-            if (video.readyState < 2) { // HAVE_CURRENT_DATA
-              console.log('AI Video: Waiting for video to be ready...');
+            // Ensure video is ready
+            if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+              video.muted = true;
+              video.loop = true;
+              video.volume = 0;
               
-              // Wait for video to be ready or timeout
-              await new Promise((resolve) => {
-                const onReady = () => {
-                  console.log('AI Video: Video is now ready');
-                  video.removeEventListener('canplay', onReady);
-                  video.removeEventListener('loadeddata', onReady);
-                  resolve(true);
-                };
-                
-                video.addEventListener('canplay', onReady);
-                video.addEventListener('loadeddata', onReady);
-                
-                // Timeout after 5 seconds
-                setTimeout(() => {
-                  video.removeEventListener('canplay', onReady);
-                  video.removeEventListener('loadeddata', onReady);
-                  resolve(false);
-                }, 5000);
-              });
+              await video.play();
+              console.log('✅ AI Video: Playing in sync with audio');
             }
-            
-            // Ensure video properties are set
-            video.muted = true;
-            video.loop = true;
-            video.volume = 0;
-            
-            // Try to play
-            console.log('AI Video: Attempting to play...');
-            await video.play();
-            console.log('✅ AI Video: Successfully started playing');
-            
           } catch (error) {
             console.error('❌ AI Video: Failed to play:', error);
-            
-            // Show fallback content
-            const fallback = document.getElementById('ai-avatar-fallback');
-            if (fallback) {
-              fallback.style.display = 'flex';
-              console.log('Showing fallback content due to play failure');
-            }
-            
-            // Try again after user interaction
-            setTimeout(() => {
-              console.log('AI Video: Retrying play after delay...');
-              video.play().catch(retryError => {
-                console.error('AI Video: Retry also failed:', retryError);
-              });
-            }, 1000);
           }
         };
         
         playVideo();
         
       } else {
-        console.log('AI Video: Interview ended, pausing video');
+        console.log('AI Video: Agent not speaking or interview ended, pausing video');
         video.pause();
-        video.currentTime = 0;
         
-        // Hide fallback and show video element
-        const fallback = document.getElementById('ai-avatar-fallback');
-        if (fallback) {
-          fallback.style.display = 'none';
-          video.style.display = 'block';
+        // Don't reset to start - just pause at current position for more natural look
+        if (!interviewStarted) {
+          video.currentTime = 0;
         }
       }
     }
-  }, [interviewStarted]);
+  }, [isAgentSpeaking, interviewStarted]);
 
   // Get session ID from URL on component mount
   useEffect(() => {
@@ -482,6 +444,7 @@ export const VideoInterview: React.FC = () => {
     
     onDisconnect: () => {
       console.log('Disconnected from ElevenLabs');
+      setIsAgentSpeaking(false); // Stop video when disconnected
     },
     
     onMessage: (message) => {
@@ -491,6 +454,7 @@ export const VideoInterview: React.FC = () => {
     onError: (error) => {
       console.error('Conversation error:', error);
       setError('An error occurred with the AI interviewer. Please check your connection and try again.');
+      setIsAgentSpeaking(false); // Stop video on error
     },
     
     clientTools: {
@@ -508,6 +472,16 @@ export const VideoInterview: React.FC = () => {
         };
         console.log('Interview report:', report);
         return JSON.stringify(report);
+      }
+    },
+    
+    onModeChange: (mode: { mode: 'speaking' | 'listening' }) => {
+      console.log('Conversation mode changed:', mode);
+      // When ElevenLabs detects the agent is speaking
+      if (mode.mode === 'speaking') {
+        setIsAgentSpeaking(true);
+      } else {
+        setIsAgentSpeaking(false);
       }
     },
     
@@ -536,10 +510,37 @@ export const VideoInterview: React.FC = () => {
     console.log('Message content:', message.message);
     console.log('Full message object:', JSON.stringify(message, null, 2));
     
+    // Handle audio events to sync video
+    if (message.type === 'audio' || message.audio_event) {
+      console.log('Audio event received - Agent is speaking');
+      setIsAgentSpeaking(true);
+      
+      // Add to audio queue if we have audio data
+      if (message.audio_event?.audio_base_64) {
+        setAudioQueue(prev => [...prev, {
+          audio: message.audio_event.audio_base_64,
+          id: message.audio_event.event_id || Date.now()
+        }]);
+      }
+    }
+    
+    // Handle agent response start
+    if (message.type === 'agent_response' || (message.source === 'ai' && message.message)) {
+      console.log('Agent response started');
+      setIsAgentSpeaking(true);
+    }
+    
+    // Handle interruption or end of speech
+    if (message.type === 'interruption' || message.type === 'user_transcript') {
+      console.log('Speech interrupted or user speaking - stopping video');
+      setIsAgentSpeaking(false);
+    }
+    
     // Handle the standard ElevenLabs message structure
     if (message.source === 'user' && message.message) {
       console.log('Adding user message:', message.message);
       addTranscriptEntry('user', message.message);
+      setIsAgentSpeaking(false); // User is speaking, agent is not
     } else if (message.source === 'ai' && message.message) {
       console.log('Adding AI message:', message.message);
       addTranscriptEntry('agent', message.message);
@@ -571,6 +572,23 @@ export const VideoInterview: React.FC = () => {
     }
   };
 
+  // Audio silence detection timer
+  useEffect(() => {
+    let silenceTimer: NodeJS.Timeout;
+    
+    if (isAgentSpeaking) {
+      // Set a timer to stop video if no audio events come for 2 seconds
+      silenceTimer = setTimeout(() => {
+        console.log('No audio events for 2 seconds, stopping video');
+        setIsAgentSpeaking(false);
+      }, 2000); // 2 seconds of silence
+    }
+    
+    return () => {
+      if (silenceTimer) clearTimeout(silenceTimer);
+    };
+  }, [isAgentSpeaking, audioQueue]);
+  
   // Add entry to transcript
   const addTranscriptEntry = (speaker: 'user' | 'agent', text: string) => {
     console.log(`Adding transcript entry - Speaker: ${speaker}, Text: ${text}`);
@@ -932,6 +950,7 @@ export const VideoInterview: React.FC = () => {
     setTranscript([]);
     setCurrentTranscript('');
     setConversationId(null);
+    setIsAgentSpeaking(false); // Stop video
     
     // Reset anti-cheating counters
     setFullscreenExitCount(0);
@@ -1181,7 +1200,11 @@ export const VideoInterview: React.FC = () => {
                 
                 {/* Video status overlay */}
                 <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded-full text-white text-sm">
-                  Video Status: <span id="video-status">Loading...</span>
+                  <div>Video: <span id="video-status">Loading...</span></div>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className={`w-2 h-2 rounded-full ${isAgentSpeaking ? 'bg-green-500 animate-pulse' : 'bg-gray-400'}`} />
+                    <span className="text-xs">{isAgentSpeaking ? '🔊 Speaking' : '🔇 Silent'}</span>
+                  </div>
                 </div>
                 
                 {/* Interview status overlay */}
