@@ -310,25 +310,47 @@ export const VideoInterview: React.FC = () => {
           // Use the Azure Blob Storage URL for the AI avatar video
           const aiAvatarVideoUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
           
-          console.log('Loading AI Avatar video from Azure Blob Storage...');
+          console.log('🎬 Loading AI Avatar video from Azure Blob Storage...');
           updateVideoStatus('Loading AI Avatar...');
           
-          // Set the video source directly to the blob URL
-          video.src = aiAvatarVideoUrl;
-          video.load();
+          // Test video accessibility first
+          const response = await fetch(aiAvatarVideoUrl, { method: 'HEAD' });
+          console.log('🌐 Video accessibility check:', response.status, response.statusText);
           
-          console.log('Video source set to:', aiAvatarVideoUrl);
+          if (response.ok) {
+            // Set the video source directly to the blob URL
+            video.src = aiAvatarVideoUrl;
+            video.load();
+            
+            console.log('✅ Video source set to:', aiAvatarVideoUrl);
+            
+            // Add a listener to confirm when video is ready
+            video.addEventListener('loadeddata', () => {
+              console.log('🎬 Video data loaded - ready for synchronization');
+              updateVideoStatus('Ready for sync');
+            }, { once: true });
+            
+          } else {
+            throw new Error(`Video not accessible: ${response.status}`);
+          }
           
         } catch (error) {
           console.error('❌ Failed to set up video:', error);
           updateVideoStatus('Setup failed');
           
-          // Show fallback immediately
-          const fallback = document.getElementById('ai-avatar-fallback');
-          if (fallback) {
-            fallback.style.display = 'flex';
-            video.style.display = 'none';
-          }
+          // Try fallback with local video
+          console.log('🔄 Trying fallback local video...');
+          video.src = '/ai-avatar.mp4';
+          video.load();
+          
+          video.addEventListener('error', () => {
+            // Show fallback content if both sources fail
+            const fallback = document.getElementById('ai-avatar-fallback');
+            if (fallback) {
+              fallback.style.display = 'flex';
+              video.style.display = 'none';
+            }
+          }, { once: true });
         }
       };
       
@@ -448,52 +470,80 @@ export const VideoInterview: React.FC = () => {
     },
     
       onModeChange: (mode) => {
-    console.log('Mode changed:', mode);
+    console.log('🎤 ElevenLabs Mode changed:', mode);
+    console.log('🎯 Current states:', { 
+      interviewStarted, 
+      isConversationReady, 
+      videoReadyState: aiVideoRef.current?.readyState,
+      videoSrc: aiVideoRef.current?.src 
+    });
     
-    // Only control video when conversation is ready and interview started
-    if (!isConversationReady || !interviewStarted) {
-      console.log('Conversation not ready or interview not started, ignoring mode change');
-      return;
+    // Update agent status in UI immediately
+    const agentStatusElement = document.getElementById('agent-status');
+    if (agentStatusElement) {
+      agentStatusElement.textContent = mode.mode === 'speaking' ? 'speaking' : 'listening';
+      console.log(`📱 Updated UI status to: ${mode.mode}`);
     }
     
     // Control AI avatar video based on speaking mode
-    if (aiVideoRef.current) {
+    if (aiVideoRef.current && interviewStarted) {
       const video = aiVideoRef.current;
       
       if (mode.mode === 'speaking') {
         // ElevenLabs is speaking - play the video
-        console.log('AI is speaking - playing video');
+        console.log('🗣️ AI is speaking - attempting to play video');
         
-        // Ensure video is ready before playing
-        if (video.readyState >= 2) {
-          video.play().catch(err => {
-            console.error('Failed to play video during speaking:', err);
-          });
-        } else {
-          console.log('Video not ready, waiting for it to be ready before playing');
-          video.addEventListener('canplay', () => {
-            video.play().catch(err => {
-              console.error('Failed to play video after waiting:', err);
-            });
-          }, { once: true });
-        }
+        const playVideo = async () => {
+          try {
+            // Force video properties
+            video.muted = true;
+            video.loop = true;
+            
+            console.log('🎬 Video play attempt - readyState:', video.readyState);
+            console.log('🎬 Video src:', video.src);
+            console.log('🎬 Video duration:', video.duration);
+            
+            await video.play();
+            console.log('✅ Video is now playing!');
+            
+            // Visual feedback
+            video.style.opacity = '1';
+            
+          } catch (err) {
+            console.error('❌ Failed to play video during speaking:', err);
+            
+            // Try to load and play again
+            if (!video.src || video.src.includes('blob:')) {
+              console.log('🔄 Attempting to reload video source...');
+              video.src = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
+              video.load();
+              
+              video.addEventListener('canplay', () => {
+                video.play().catch(retryErr => {
+                  console.error('❌ Retry play failed:', retryErr);
+                });
+              }, { once: true });
+            }
+          }
+        };
         
-        // Update agent status in UI
-        const agentStatusElement = document.getElementById('agent-status');
-        if (agentStatusElement) {
-          agentStatusElement.textContent = 'speaking';
-        }
-      } else {
+        // Call play function
+        playVideo();
+        
+      } else if (mode.mode === 'listening') {
         // ElevenLabs is listening - pause the video
-        console.log('AI is listening - pausing video');
+        console.log('👂 AI is listening - pausing video');
         video.pause();
+        console.log('⏸️ Video paused');
         
-        // Update agent status in UI
-        const agentStatusElement = document.getElementById('agent-status');
-        if (agentStatusElement) {
-          agentStatusElement.textContent = 'listening';
-        }
+        // Visual feedback
+        video.style.opacity = '0.8';
       }
+    } else {
+      console.log('⚠️ Cannot control video:', {
+        hasVideoRef: !!aiVideoRef.current,
+        interviewStarted
+      });
     }
   },
     
@@ -1187,7 +1237,12 @@ export const VideoInterview: React.FC = () => {
                 
                 {/* Video status overlay */}
                 <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded-full text-white text-sm">
-                  Video Status: <span id="video-status">Loading...</span>
+                  Video: <span id="video-status">Loading...</span>
+                  {interviewStarted && (
+                    <span className="ml-2">
+                      | Conv: {isConversationReady ? '✅' : '⏳'}
+                    </span>
+                  )}
                 </div>
                 
                 {/* Agent status indicator */}
@@ -1265,29 +1320,64 @@ export const VideoInterview: React.FC = () => {
                       console.log('Video readyState:', video.readyState);
                       console.log('Video networkState:', video.networkState);
                       
-                                              try {
-                          // Test video accessibility from Azure Blob Storage
-                          const blobUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
-                          console.log('Testing Azure Blob Storage video:', blobUrl);
-                          
-                          const response = await fetch(blobUrl, { method: 'HEAD' });
-                          console.log('✅ Video accessibility test:', response.status, response.statusText);
-                          console.log('Content-Type:', response.headers.get('content-type'));
-                          console.log('Content-Length:', response.headers.get('content-length'));
-                          
-                          // Set video source and try to play
-                          video.src = blobUrl;
-                          video.muted = true;
-                          await video.play();
-                          console.log('✅ Manual video play successful from Azure Blob Storage');
-                        } catch (error) {
-                          console.error('❌ Manual video test failed:', error);
-                        }
+                      try {
+                        // Test video accessibility from Azure Blob Storage
+                        const blobUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
+                        console.log('Testing Azure Blob Storage video:', blobUrl);
+                        
+                        const response = await fetch(blobUrl, { method: 'HEAD' });
+                        console.log('✅ Video accessibility test:', response.status, response.statusText);
+                        console.log('Content-Type:', response.headers.get('content-type'));
+                        console.log('Content-Length:', response.headers.get('content-length'));
+                        
+                        // Set video source and try to play
+                        video.src = blobUrl;
+                        video.muted = true;
+                        await video.play();
+                        console.log('✅ Manual video play successful from Azure Blob Storage');
+                      } catch (error) {
+                        console.error('❌ Manual video test failed:', error);
+                      }
                     }
                   }}
                   className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-md transition-colors"
                 >
                   Test Video
+                </Button>
+                <Button 
+                  onClick={() => {
+                    // Manually trigger speaking mode for testing
+                    console.log('🧪 Manual speaking mode test');
+                    const agentStatusElement = document.getElementById('agent-status');
+                    if (agentStatusElement) {
+                      agentStatusElement.textContent = 'speaking';
+                    }
+                    
+                    if (aiVideoRef.current) {
+                      const video = aiVideoRef.current;
+                      video.muted = true;
+                      video.loop = true;
+                      video.play().then(() => {
+                        console.log('✅ Manual speaking mode - video playing');
+                        video.style.opacity = '1';
+                        
+                        // Auto switch back to listening after 3 seconds
+                        setTimeout(() => {
+                          video.pause();
+                          video.style.opacity = '0.8';
+                          if (agentStatusElement) {
+                            agentStatusElement.textContent = 'listening';
+                          }
+                          console.log('⏸️ Manual test - switched back to listening');
+                        }, 3000);
+                      }).catch(err => {
+                        console.error('❌ Manual speaking mode failed:', err);
+                      });
+                    }
+                  }}
+                  className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-sm rounded-md transition-colors"
+                >
+                  Test Sync
                 </Button>
               </div>
             </div>
