@@ -13,7 +13,7 @@ export const WebhookSetupGuide: React.FC<WebhookSetupGuideProps> = ({ isOpen, on
   const [copied, setCopied] = useState(false);
   
   // Get the backend URL
-  const backendUrl = import.meta.env.VITE_API_BASE_URL || window.location.origin.replace(':5173', ':8000');
+  const backendUrl = 'https://backendb2b.azurewebsites.net'; // Hardcoded backend URL
   const fullWebhookUrl = `${backendUrl}/api/convai-webhook`;
 
   const copyToClipboard = async (text: string) => {

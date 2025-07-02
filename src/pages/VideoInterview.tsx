@@ -356,7 +356,7 @@ export const VideoInterview: React.FC = () => {
         
         // Optionally update the session if we have one
         if (sessionData?.session_id) {
-          fetch(`${import.meta.env.VITE_API_BASE_URL || 'https://backendb2b.azurewebsites.net'}/api/interviews/${sessionData.session_id}/update-conversation`, {
+          fetch(`https://backendb2b.azurewebsites.net/api/interviews/${sessionData.session_id}/update-conversation`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ conversation_id: msgConvId })
@@ -478,14 +478,9 @@ export const VideoInterview: React.FC = () => {
       // Enter fullscreen mode for anti-cheating
       await enterFullscreen();
       
-      // Get agent ID from environment or use demo
-      const agentId = import.meta.env.VITE_ELEVENLABS_AGENT_ID || 'demo-agent-id';
+      // Get agent ID - hardcoded ElevenLabs agent ID
+      const agentId = 'agent_01jw4mdjgvef2rmm7e3kgnsrzp'; // Hardcoded ElevenLabs agent ID
       console.log('Using ElevenLabs Agent ID:', agentId);
-      
-      // Check if we have a real agent ID (not demo)
-      if (agentId === 'demo-agent-id') {
-        throw new Error('Please configure VITE_ELEVENLABS_AGENT_ID environment variable with your real ElevenLabs agent ID. You can create an agent at https://elevenlabs.io/app/conversational-ai');
-      }
       
       let sessionResponse: any;
       
@@ -633,7 +628,7 @@ export const VideoInterview: React.FC = () => {
           const durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
           
           // Send transcript directly to backend
-          const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'https://backendb2b.azurewebsites.net'}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
+          const response = await fetch(`https://backendb2b.azurewebsites.net/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
