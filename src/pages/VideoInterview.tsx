@@ -6,6 +6,7 @@ import { InterviewService } from '../lib/services';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { useNavigate } from 'react-router-dom';
+import { Card, CardContent } from '../components/ui/card';
 
 const INTERVIEW_DURATION = 15 * 60; // 15 minutes in seconds
 
@@ -208,33 +209,119 @@ export const VideoInterview: React.FC = () => {
     if (aiVideoRef.current) {
       const video = aiVideoRef.current;
       
-      // Set up video source
-      video.src = '/ai-avatar.mp4';
+      // Function to update video status display
+      const updateVideoStatus = (status: string) => {
+        const statusElement = document.getElementById('video-status');
+        if (statusElement) {
+          statusElement.textContent = status;
+        }
+        console.log('Video Status:', status);
+      };
+      
+      // Reset any previous errors
+      video.removeAttribute('src');
+      updateVideoStatus('Initializing...');
+      
+      // Set up video properties first
+      video.preload = 'metadata';
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.autoplay = false; // Don't autoplay until we explicitly call play
       
       // Add event listeners for debugging
-      video.addEventListener('loadstart', () => console.log('AI Video: Load started'));
-      video.addEventListener('loadedmetadata', () => console.log('AI Video: Metadata loaded'));
-      video.addEventListener('loadeddata', () => console.log('AI Video: Data loaded'));
-      video.addEventListener('canplay', () => console.log('AI Video: Can play'));
-      video.addEventListener('canplaythrough', () => console.log('AI Video: Can play through'));
-      video.addEventListener('error', (e) => console.error('AI Video: Error', e));
-      video.addEventListener('stalled', () => console.log('AI Video: Stalled'));
-      video.addEventListener('waiting', () => console.log('AI Video: Waiting'));
-      video.addEventListener('playing', () => console.log('AI Video: Playing'));
-      video.addEventListener('pause', () => console.log('AI Video: Paused'));
-      
-      // Try to preload the video
-      video.preload = 'metadata';
-      video.load();
-      
-      // Test if video can be played immediately
-      video.play().then(() => {
-        console.log('AI Video: Initial play test successful');
-        video.pause();
-        video.currentTime = 0;
-      }).catch((error) => {
-        console.log('AI Video: Initial play test failed (expected):', error.message);
+      video.addEventListener('loadstart', () => {
+        console.log('AI Video: Load started');
+        updateVideoStatus('Loading...');
       });
+      video.addEventListener('loadedmetadata', () => {
+        console.log('AI Video: Metadata loaded');
+        console.log('Video duration:', video.duration);
+        console.log('Video dimensions:', video.videoWidth, 'x', video.videoHeight);
+        updateVideoStatus('Metadata loaded');
+      });
+      video.addEventListener('loadeddata', () => {
+        console.log('AI Video: Data loaded');
+        updateVideoStatus('Data loaded');
+      });
+      video.addEventListener('canplay', () => {
+        console.log('AI Video: Can play');
+        updateVideoStatus('Ready');
+      });
+      video.addEventListener('canplaythrough', () => {
+        console.log('AI Video: Can play through');
+        updateVideoStatus('Ready to play');
+      });
+      video.addEventListener('playing', () => {
+        console.log('AI Video: Playing');
+        updateVideoStatus('Playing');
+      });
+      video.addEventListener('pause', () => {
+        console.log('AI Video: Paused');
+        updateVideoStatus('Paused');
+      });
+      video.addEventListener('error', (e) => {
+        console.error('AI Video: Error event', e);
+        updateVideoStatus('Error');
+        const error = video.error;
+        if (error) {
+          console.error('AI Video: Error details:', {
+            code: error.code,
+            message: error.message,
+            MEDIA_ERR_ABORTED: error.MEDIA_ERR_ABORTED,
+            MEDIA_ERR_NETWORK: error.MEDIA_ERR_NETWORK,
+            MEDIA_ERR_DECODE: error.MEDIA_ERR_DECODE,
+            MEDIA_ERR_SRC_NOT_SUPPORTED: error.MEDIA_ERR_SRC_NOT_SUPPORTED
+          });
+        }
+        
+        // Show fallback on error
+        const fallback = document.getElementById('ai-avatar-fallback');
+        if (fallback) {
+          fallback.style.display = 'flex';
+          video.style.display = 'none';
+        }
+      });
+      video.addEventListener('stalled', () => {
+        console.log('AI Video: Stalled');
+        updateVideoStatus('Stalled');
+      });
+      video.addEventListener('waiting', () => {
+        console.log('AI Video: Waiting');
+        updateVideoStatus('Buffering...');
+      });
+      
+      // Try multiple video formats/approaches
+      const tryLoadVideo = async () => {
+        try {
+          // First, test if the video file is accessible
+          console.log('Testing video file accessibility...');
+          updateVideoStatus('Testing access...');
+          const response = await fetch('/ai-avatar.mp4', { method: 'HEAD' });
+          console.log('Video file response:', response.status, response.statusText);
+          
+          if (response.ok) {
+            console.log('✅ Video file is accessible, setting source');
+            updateVideoStatus('Setting source...');
+            video.src = '/ai-avatar.mp4';
+            video.load();
+          } else {
+            throw new Error(`Video file not accessible: ${response.status}`);
+          }
+        } catch (error) {
+          console.error('❌ Failed to access video file:', error);
+          updateVideoStatus('File not found');
+          
+          // Show fallback immediately
+          const fallback = document.getElementById('ai-avatar-fallback');
+          if (fallback) {
+            fallback.style.display = 'flex';
+            video.style.display = 'none';
+          }
+        }
+      };
+      
+      tryLoadVideo();
     }
   }, []);
 
@@ -246,42 +333,59 @@ export const VideoInterview: React.FC = () => {
       if (interviewStarted) {
         console.log('AI Video: Starting interview, attempting to play video');
         
-        // Ensure video is ready to play
         const playVideo = async () => {
           try {
-            // Make sure video is loaded
+            // Check if video is ready
             if (video.readyState < 2) { // HAVE_CURRENT_DATA
-              console.log('AI Video: Waiting for video to load...');
+              console.log('AI Video: Waiting for video to be ready...');
+              
+              // Wait for video to be ready or timeout
               await new Promise((resolve) => {
-                const onCanPlay = () => {
-                  video.removeEventListener('canplay', onCanPlay);
+                const onReady = () => {
+                  console.log('AI Video: Video is now ready');
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
                   resolve(true);
                 };
-                video.addEventListener('canplay', onCanPlay);
+                
+                video.addEventListener('canplay', onReady);
+                video.addEventListener('loadeddata', onReady);
                 
                 // Timeout after 5 seconds
                 setTimeout(() => {
-                  video.removeEventListener('canplay', onCanPlay);
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
                   resolve(false);
                 }, 5000);
               });
             }
             
-            // Set volume and properties
-            video.volume = 0; // Keep muted to avoid audio conflicts
-            video.loop = true;
+            // Ensure video properties are set
             video.muted = true;
+            video.loop = true;
+            video.volume = 0;
             
             // Try to play
+            console.log('AI Video: Attempting to play...');
             await video.play();
-            console.log('AI Video: Successfully started playing');
+            console.log('✅ AI Video: Successfully started playing');
             
           } catch (error) {
-            console.error('AI Video: Failed to play:', error);
+            console.error('❌ AI Video: Failed to play:', error);
             
-            // Try alternative approach
+            // Show fallback content
+            const fallback = document.getElementById('ai-avatar-fallback');
+            if (fallback) {
+              fallback.style.display = 'flex';
+              console.log('Showing fallback content due to play failure');
+            }
+            
+            // Try again after user interaction
             setTimeout(() => {
-              video.play().catch(console.error);
+              console.log('AI Video: Retrying play after delay...');
+              video.play().catch(retryError => {
+                console.error('AI Video: Retry also failed:', retryError);
+              });
             }, 1000);
           }
         };
@@ -292,6 +396,13 @@ export const VideoInterview: React.FC = () => {
         console.log('AI Video: Interview ended, pausing video');
         video.pause();
         video.currentTime = 0;
+        
+        // Hide fallback and show video element
+        const fallback = document.getElementById('ai-avatar-fallback');
+        if (fallback) {
+          fallback.style.display = 'none';
+          video.style.display = 'block';
+        }
       }
     }
   }, [interviewStarted]);
@@ -1034,54 +1145,58 @@ export const VideoInterview: React.FC = () => {
           </div>
           {/* Right: AI Avatar video */}
           <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center min-h-[540px] max-w-[48%] relative" style={{ height: '540px' }}>
-            {interviewStarted ? (
-              <div className="w-full h-full relative">
+            {/* AI Avatar Video Area */}
+            <Card className="h-full">
+              <CardContent className="p-0 h-full relative bg-gradient-to-br from-blue-900 to-purple-900">
+                {/* Video element */}
                 <video 
-                  ref={aiVideoRef} 
-                  loop 
-                  muted 
+                  ref={aiVideoRef}
+                  className="w-full h-full object-cover rounded-lg"
                   playsInline
-                  className="w-full h-full object-cover"
-                  poster="/placeholder.svg"
-                  onError={(e) => {
-                    console.error('AI Video element error:', e);
-                    // Show fallback content
-                    e.currentTarget.style.display = 'none';
-                  }}
-                  onLoadStart={() => console.log('AI Video: Starting to load')}
-                  onCanPlay={() => console.log('AI Video: Can play event')}
-                  onPlaying={() => console.log('AI Video: Playing event')}
+                  muted
+                  loop
+                  style={{ display: 'block' }}
                 >
                   <source src="/ai-avatar.mp4" type="video/mp4" />
                   Your browser does not support the video tag.
                 </video>
                 
-                {/* Fallback content if video fails */}
+                {/* Fallback content for when video fails */}
                 <div 
-                  className="absolute inset-0 bg-gradient-to-br from-blue-500 to-purple-600 flex flex-col items-center justify-center text-white"
-                  style={{ display: 'none' }}
                   id="ai-avatar-fallback"
+                  className="absolute inset-0 bg-gradient-to-br from-blue-900 to-purple-900 flex flex-col items-center justify-center text-white rounded-lg"
+                  style={{ display: 'none' }}
                 >
-                  <div className="w-24 h-24 bg-white bg-opacity-20 rounded-full mb-4 flex items-center justify-center">
-                    <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 20 20">
-                      <path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" />
-                    </svg>
+                  <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mb-4">
+                    <div className="w-12 h-12 rounded-full bg-white/30 flex items-center justify-center">
+                      <span className="text-2xl">🤖</span>
+                    </div>
                   </div>
-                  <p className="text-xl font-semibold">AI Interviewer</p>
-                  <p className="text-sm opacity-80">Video loading...</p>
+                  <h3 className="text-xl font-semibold mb-2">AI Interviewer</h3>
+                  <p className="text-sm text-white/80 text-center max-w-48">
+                    {interviewStarted ? 'Interview in progress...' : 'Ready to interview'}
+                  </p>
                 </div>
-              </div>
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-gray-400">
-                <div className="w-24 h-24 bg-gray-200 rounded-full mb-4 flex items-center justify-center">
-                  <svg className="w-12 h-12 text-gray-400" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" />
-                  </svg>
+                
+                {/* Video status overlay */}
+                <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded-full text-white text-sm">
+                  Video Status: <span id="video-status">Loading...</span>
                 </div>
-                <p className="text-lg">AI Interviewer</p>
-                <p className="text-sm">Will appear when interview starts</p>
-              </div>
-            )}
+                
+                {/* Interview status overlay */}
+                {!interviewStarted && (
+                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg">
+                    <div className="text-center text-white">
+                      <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
+                        <span className="text-2xl">🎯</span>
+                      </div>
+                      <h3 className="text-lg font-semibold mb-2">Ready to Start</h3>
+                      <p className="text-sm text-white/80">Click "Start Interview" to begin</p>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
             
             {/* Video debug info (only in development) */}
             {interviewStarted && aiVideoRef.current && (
@@ -1122,28 +1237,30 @@ export const VideoInterview: React.FC = () => {
                   Test Transcript
                 </Button>
                 <Button 
-                  onClick={() => {
+                  onClick={async () => {
                     if (aiVideoRef.current) {
                       const video = aiVideoRef.current;
-                      console.log('Manual video test - Current state:');
+                      console.log('🧪 Manual video test initiated');
+                      console.log('Video element:', video);
                       console.log('Video src:', video.src);
                       console.log('Video readyState:', video.readyState);
-                      console.log('Video paused:', video.paused);
-                      console.log('Video currentTime:', video.currentTime);
-                      console.log('Video duration:', video.duration);
+                      console.log('Video networkState:', video.networkState);
                       
-                      video.play().then(() => {
+                      try {
+                        // Test video accessibility
+                        const response = await fetch('/ai-avatar.mp4', { method: 'HEAD' });
+                        console.log('✅ Video accessibility test:', response.status, response.statusText);
+                        
+                        // Try to play
+                        video.muted = true;
+                        await video.play();
                         console.log('✅ Manual video play successful');
-                        toast.success('Video test successful!');
-                      }).catch((error) => {
-                        console.error('❌ Manual video play failed:', error);
-                        toast.error('Video test failed: ' + error.message);
-                      });
+                      } catch (error) {
+                        console.error('❌ Manual video test failed:', error);
+                      }
                     }
-                  }} 
-                  variant="outline" 
-                  size="sm" 
-                  className="text-xs"
+                  }}
+                  className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-md transition-colors"
                 >
                   Test Video
                 </Button>
