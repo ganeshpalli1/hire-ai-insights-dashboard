@@ -54,6 +54,11 @@ export const VideoInterview: React.FC = () => {
   const [warningTimer, setWarningTimer] = useState(180); // 3 minutes in seconds
   const [warningTimerActive, setWarningTimerActive] = useState(false);
   
+  // Add state for managing autoplay permissions and user interaction
+  const [hasUserInteracted, setHasUserInteracted] = useState(false);
+  const [videoCanAutoplay, setVideoCanAutoplay] = useState(false);
+  const [autoplaySupported, setAutoplaySupported] = useState('unknown');
+  
   const navigate = useNavigate();
 
   // AI interviewer questions for demo
@@ -225,10 +230,10 @@ export const VideoInterview: React.FC = () => {
       
       // Set up video properties first
       video.preload = 'metadata';
-      video.muted = true;
+      video.muted = true; // Always muted for autoplay compliance
       video.loop = true;
       video.playsInline = true;
-      video.autoplay = false; // Don't autoplay until we explicitly call play
+      video.autoplay = false; // Don't use HTML autoplay attribute
       video.currentTime = 0; // Start from beginning
       
       // Add event listeners for debugging
@@ -248,6 +253,7 @@ export const VideoInterview: React.FC = () => {
         // Ensure video is paused and ready
         video.pause();
         video.currentTime = 0;
+        updateVideoStatus('Ready for sync');
       });
       video.addEventListener('canplay', () => {
         console.log('AI Video: Can play');
@@ -384,7 +390,72 @@ export const VideoInterview: React.FC = () => {
     if (sessionId) {
       loadInterviewSession(sessionId);
     }
+    
+    // Check autoplay policy support
+    checkAutoplaySupport();
+    
+    // Add global click listener to detect user interaction
+    const handleUserInteraction = () => {
+      console.log('👆 User interaction detected - enabling video autoplay');
+      setHasUserInteracted(true);
+      
+      // Remove listener after first interaction
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+    };
+    
+    document.addEventListener('click', handleUserInteraction);
+    document.addEventListener('touchstart', handleUserInteraction);
+    document.addEventListener('keydown', handleUserInteraction);
+    
+    return () => {
+      document.removeEventListener('click', handleUserInteraction);
+      document.removeEventListener('touchstart', handleUserInteraction);
+      document.removeEventListener('keydown', handleUserInteraction);
+    };
   }, []);
+
+  // Function to check autoplay policy
+  const checkAutoplaySupport = async () => {
+    try {
+      if ('getAutoplayPolicy' in navigator) {
+        const policy = (navigator as any).getAutoplayPolicy('mediaelement');
+        console.log('🎬 Autoplay policy:', policy);
+        setAutoplaySupported(policy);
+        setVideoCanAutoplay(policy === 'allowed' || policy === 'allowed-muted');
+      } else {
+        console.log('🎬 getAutoplayPolicy not supported, testing with video element');
+        await testVideoAutoplay();
+      }
+    } catch (error) {
+      console.error('❌ Error checking autoplay support:', error);
+      setAutoplaySupported('disallowed');
+      setVideoCanAutoplay(false);
+    }
+  };
+
+  // Fallback autoplay test
+  const testVideoAutoplay = async () => {
+    try {
+      const testVideo = document.createElement('video');
+      testVideo.muted = true;
+      testVideo.autoplay = true;
+      testVideo.src = 'data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMWF2YzFtcDQxAAAACGZyZWUAAAAAAAAAAmEbEwAACXxtZGF0AAACrgYF//+q3EXpvebZSLeWLNgg2SPu73gyNjQgLSBjb3JlIDE0OCByMjc0OCA5OTE4MDk2IC0gSC4yNjQvTVBFRy00IEFWQyBjb2RlYyAtIENvcHlsZWZ0IDIwMDMtMjAxNiAtIGh0dHA6Ly93d3cudmlkZW9sYW4ub3JnL3gyNjQuaHRtbCAtIG9wdGlvbnM6IGNhYmFjPTEgcmVmPTMgZGVibG9jaz0xOjA6MCBhbmFseXNlPTB4MzoweDExMyBtZT1oZXggc3VibWU9NyBwc3k9MSBwc3lfcmQ9MS4wMDowLjAwIG1peGVkX3JlZj0xIG1lX3JhbmdlPTE2IGNocm9tYV9tZT0xIHRyZWxsaXM9MSA4eDhkY3Q9MSBjcW09MCBkZWFkem9uZT0yMSwxMSBmYXN0X3Bza2lwPTEgY2hyb21hX3FwX29mZnNldD0tMiB0aHJlYWRzPTMgbG9va2FoZWFkX3RocmVhZHM9MSBzbGljZWRfdGhyZWFkcz0wIG5yPTAgZGVjaW1hdGU9MSBpbnRlcmxhY2VkPTAgYmx1cmF5X2NvbXBhdD0wIGNvbnN0cmFpbmVkX2ludHJhPTAgYmZyYW1lcz0zIGJfcHlyYW1pZD0yIGJfYWRhcHQ9MSBiX2JpYXM9MCBkaXJlY3Q9MSB3ZWlnaHRiPTEgb3Blbl9nb3A9MCB3ZWlnaHRwPTIga2V5aW50PTI1MCBrZXlpbnRfbWluPTI1IHNjZW5lY3V0PTQwIGludHJhX3JlZnJlc2g9MCByY19sb29rYWhlYWQ9NDAgcmM9Y3JmIG1idHJlZT0xIGNyZj0yMy4wIHFjb21wPTAuNjAgcXBtaW49MCBxcG1heD02OSBxcHN0ZXA9NCBpcF9yYXRpbz0xLjQwIGFxPTE6MS4wMACAAAAASGWIhAA3//72hEfLgAACALAY/////g==';
+      
+      const playPromise = testVideo.play();
+      if (playPromise) {
+        await playPromise;
+        console.log('✅ Video autoplay test passed');
+        setAutoplaySupported('allowed-muted');
+        setVideoCanAutoplay(true);
+      }
+    } catch (error) {
+      console.log('❌ Video autoplay test failed:', error);
+      setAutoplaySupported('disallowed');
+      setVideoCanAutoplay(false);
+    }
+  };
 
   const loadInterviewSession = async (sessionId: string) => {
     setLoadingSession(true);
@@ -474,6 +545,9 @@ export const VideoInterview: React.FC = () => {
     console.log('🎯 Current states:', { 
       interviewStarted, 
       isConversationReady, 
+      hasUserInteracted,
+      videoCanAutoplay,
+      autoplaySupported,
       videoReadyState: aiVideoRef.current?.readyState,
       videoSrc: aiVideoRef.current?.src 
     });
@@ -490,45 +564,62 @@ export const VideoInterview: React.FC = () => {
       const video = aiVideoRef.current;
       
       if (mode.mode === 'speaking') {
-        // ElevenLabs is speaking - play the video
+        // ElevenLabs is speaking - attempt to play the video
         console.log('🗣️ AI is speaking - attempting to play video');
         
-        const playVideo = async () => {
-          try {
-            // Force video properties
-            video.muted = true;
-            video.loop = true;
-            
-            console.log('🎬 Video play attempt - readyState:', video.readyState);
-            console.log('🎬 Video src:', video.src);
-            console.log('🎬 Video duration:', video.duration);
-            
-            await video.play();
-            console.log('✅ Video is now playing!');
-            
-            // Visual feedback
-            video.style.opacity = '1';
-            
-          } catch (err) {
-            console.error('❌ Failed to play video during speaking:', err);
-            
-            // Try to load and play again
-            if (!video.src || video.src.includes('blob:')) {
-              console.log('🔄 Attempting to reload video source...');
-              video.src = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
-              video.load();
-              
-              video.addEventListener('canplay', () => {
-                video.play().catch(retryErr => {
-                  console.error('❌ Retry play failed:', retryErr);
-                });
-              }, { once: true });
-            }
-          }
-        };
+        // Check if we can play the video
+        const canPlayVideo = hasUserInteracted || videoCanAutoplay || autoplaySupported === 'allowed-muted';
         
-        // Call play function
-        playVideo();
+        if (canPlayVideo) {
+          const playVideo = async () => {
+            try {
+              // Ensure video properties for autoplay compliance
+              video.muted = true;
+              video.loop = true;
+              
+              console.log('🎬 Video play attempt - readyState:', video.readyState);
+              console.log('🎬 Video src:', video.src);
+              console.log('🎬 Video duration:', video.duration);
+              console.log('🎬 Can play video:', canPlayVideo);
+              
+              await video.play();
+              console.log('✅ Video is now playing!');
+              
+              // Visual feedback
+              video.style.opacity = '1';
+              
+            } catch (err) {
+              console.error('❌ Failed to play video during speaking:', err);
+              
+              // Show user interaction prompt if needed
+              if (!hasUserInteracted) {
+                console.log('💡 Video autoplay blocked - user interaction required');
+                showUserInteractionPrompt();
+              }
+              
+              // Try to reload video source if needed
+              if (!video.src || video.src.includes('blob:')) {
+                console.log('🔄 Attempting to reload video source...');
+                video.src = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
+                video.load();
+                
+                video.addEventListener('canplay', () => {
+                  if (hasUserInteracted) {
+                    video.play().catch(retryErr => {
+                      console.error('❌ Retry play failed:', retryErr);
+                    });
+                  }
+                }, { once: true });
+              }
+            }
+          };
+          
+          // Call play function
+          playVideo();
+        } else {
+          console.log('⚠️ Cannot play video - no user interaction or autoplay permission');
+          showUserInteractionPrompt();
+        }
         
       } else if (mode.mode === 'listening') {
         // ElevenLabs is listening - pause the video
@@ -755,6 +846,41 @@ export const VideoInterview: React.FC = () => {
     return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
   };
 
+  // Function to show user interaction prompt for video autoplay
+  const showUserInteractionPrompt = () => {
+    const promptElement = document.getElementById('video-interaction-prompt');
+    if (promptElement) {
+      promptElement.style.display = 'flex';
+      console.log('📱 Showing user interaction prompt for video');
+    }
+  };
+
+  // Function to enable video after user interaction
+  const enableVideoAutoplay = () => {
+    console.log('✅ User enabled video autoplay');
+    setHasUserInteracted(true);
+    
+    // Hide the prompt
+    const promptElement = document.getElementById('video-interaction-prompt');
+    if (promptElement) {
+      promptElement.style.display = 'none';
+    }
+    
+    // If AI is currently speaking, try to play the video
+    const agentStatusElement = document.getElementById('agent-status');
+    if (agentStatusElement && agentStatusElement.textContent === 'speaking') {
+      if (aiVideoRef.current) {
+        aiVideoRef.current.play().catch(err => {
+          console.error('❌ Failed to play video after user interaction:', err);
+        });
+      }
+    }
+    
+    toast.success('🎬 Video autoplay enabled!', {
+      description: 'The AI avatar will now sync with voice.',
+    });
+  };
+
   // Start interview with AI
   const startInterview = async () => {
     try {
@@ -838,6 +964,15 @@ export const VideoInterview: React.FC = () => {
       toast.success('Interview started in secure fullscreen mode', {
         description: 'Do not exit fullscreen or switch tabs during the interview.',
       });
+      
+      // Show autoplay info if needed
+      if (!hasUserInteracted && (autoplaySupported === 'disallowed' || autoplaySupported === 'unknown')) {
+        setTimeout(() => {
+          toast.info('🎬 Video Avatar Sync', {
+            description: 'Click "Enable Video Sync" when prompted to see the AI avatar animate with speech.',
+          });
+        }, 2000);
+      }
       
       console.log('Interview started successfully!');
     } catch (err) {
@@ -1241,6 +1376,7 @@ export const VideoInterview: React.FC = () => {
                   {interviewStarted && (
                     <span className="ml-2">
                       | Conv: {isConversationReady ? '✅' : '⏳'}
+                      | Auto: {hasUserInteracted ? '✅' : (autoplaySupported === 'allowed' || autoplaySupported === 'allowed-muted') ? '🔇' : '❌'}
                     </span>
                   )}
                 </div>
@@ -1269,6 +1405,43 @@ export const VideoInterview: React.FC = () => {
                     </div>
                   </div>
                 )}
+                
+                {/* User interaction prompt for video autoplay */}
+                <div 
+                  id="video-interaction-prompt"
+                  className="absolute inset-0 bg-black/70 flex items-center justify-center rounded-lg"
+                  style={{ display: 'none' }}
+                >
+                  <div className="text-center text-white max-w-sm mx-auto p-6">
+                    <div className="w-16 h-16 rounded-full bg-blue-500/20 flex items-center justify-center mx-auto mb-4">
+                      <span className="text-2xl">🎬</span>
+                    </div>
+                    <h3 className="text-lg font-semibold mb-2">Enable Video Sync</h3>
+                    <p className="text-sm text-white/80 mb-4">
+                      To see the AI avatar animated with speech, please allow video autoplay
+                    </p>
+                    <div className="space-y-2">
+                      <button
+                        onClick={enableVideoAutoplay}
+                        className="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors"
+                      >
+                        Enable Video Sync
+                      </button>
+                      <button
+                        onClick={() => {
+                          const promptElement = document.getElementById('video-interaction-prompt');
+                          if (promptElement) promptElement.style.display = 'none';
+                        }}
+                        className="w-full px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white font-medium rounded-lg transition-colors"
+                      >
+                        Continue without Video
+                      </button>
+                    </div>
+                    <p className="text-xs text-white/60 mt-3">
+                      This is required due to browser autoplay policies
+                    </p>
+                  </div>
+                </div>
               </CardContent>
             </Card>
             
@@ -1372,12 +1545,22 @@ export const VideoInterview: React.FC = () => {
                         }, 3000);
                       }).catch(err => {
                         console.error('❌ Manual speaking mode failed:', err);
+                        showUserInteractionPrompt();
                       });
                     }
                   }}
                   className="px-3 py-1 bg-green-500 hover:bg-green-600 text-white text-sm rounded-md transition-colors"
                 >
                   Test Sync
+                </Button>
+                <Button 
+                  onClick={() => {
+                    console.log('🧪 Testing autoplay prompt');
+                    showUserInteractionPrompt();
+                  }}
+                  className="px-3 py-1 bg-orange-500 hover:bg-orange-600 text-white text-sm rounded-md transition-colors"
+                >
+                  Test Prompt
                 </Button>
               </div>
             </div>
