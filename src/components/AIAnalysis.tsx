@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { DocumentIcon, FolderIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline';
 import { useJobs } from '../contexts/JobContext';
 import { toast } from 'sonner';
-import { JobAnalysis, ProcessingStatus } from '../lib/api';
+import { JobAnalysis, ProcessingStatus } from '../lib/api.ts';
 
 interface AIAnalysisProps {
   jobData: {

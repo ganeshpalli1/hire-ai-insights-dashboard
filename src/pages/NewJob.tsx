@@ -6,7 +6,7 @@ import { AIAnalysis } from '../components/AIAnalysis';
 import { InterviewConfig } from '../components/InterviewConfig';
 import { useJobs } from '../contexts/JobContext';
 import { toast } from 'sonner';
-import { JobDescriptionInput } from '../lib/api';
+import { JobDescriptionInput } from '../lib/api.ts';
 
 const steps = [
   { id: 1, name: 'Job Details', description: 'Enter job requirements' },

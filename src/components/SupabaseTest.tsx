@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { testSupabaseConnection } from '../lib/supabase';
+import { testSupabaseConnection } from '../lib/supabase.ts';
 import { useInterviewSetups, useJobs } from '../hooks';
 import { Card } from './ui/card';
 import { Button } from './ui/button';

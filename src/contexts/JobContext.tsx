@@ -6,7 +6,7 @@ import ResumeScreeningApi, {
   ResumeAnalysisResult, 
   ProcessingStatus,
   JobResultsResponse 
-} from '../lib/api';
+} from '../lib/api.ts';
 import { toast } from 'sonner';
 
 interface JobWithId extends Job {

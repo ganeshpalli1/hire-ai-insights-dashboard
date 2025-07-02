@@ -7,8 +7,8 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Avatar, AvatarFallback } from '../components/ui/avatar';
 import { toast } from 'sonner';
-import { ResumeAnalysisResult, JobResultsResponse } from '../lib/api';
-import { InterviewService } from '../lib/services';
+import { ResumeAnalysisResult, JobResultsResponse } from '../lib/api.ts';
+import { InterviewService } from '../lib/services/index.ts';
 import { useUpdateResumeResult } from '../hooks/useResumes';
 import type { CandidateType, CandidateLevel } from '../types/database';
 

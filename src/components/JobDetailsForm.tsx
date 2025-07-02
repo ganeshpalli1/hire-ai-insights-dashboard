@@ -1,5 +1,5 @@
 import React from 'react';
-import { JobDescriptionInput } from '../lib/api';
+import { JobDescriptionInput } from '../lib/api.ts';
 
 interface JobDetailsFormProps {
   data: {

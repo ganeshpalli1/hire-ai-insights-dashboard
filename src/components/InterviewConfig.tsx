@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ResumeScreeningApi, InterviewSetupInput } from '../lib/api';
+import { ResumeScreeningApi, InterviewSetupInput } from '../lib/api.ts';
 import { toast } from 'sonner';
 
 interface InterviewConfigProps {
