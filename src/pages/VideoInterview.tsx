@@ -2,7 +2,7 @@ import React, { useRef, useState, useEffect } from 'react';
 import { Button } from '../components/ui/button';
 import { FaMicrophone, FaClock, FaMicrophoneSlash, FaExpand, FaCompress } from 'react-icons/fa';
 import { useConversation } from '@11labs/react';
-import { InterviewService } from '../lib/services/index.ts';
+import { InterviewService } from '../lib/services';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { useNavigate } from 'react-router-dom';
