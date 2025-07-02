@@ -25,11 +25,38 @@ jobs:
         with:
           node-version: '18'
 
+      - name: Clean npm cache
+        run: npm cache clean --force
+
+      - name: Remove node_modules and package-lock
+        run: |
+          rm -rf node_modules
+          rm -f package-lock.json
+
       - name: Install dependencies
         run: npm install
 
+      - name: Verify TypeScript config
+        run: |
+          echo "=== tsconfig.json ==="
+          cat tsconfig.json
+          echo "=== tsconfig.app.json ==="
+          cat tsconfig.app.json
+          echo "=== vite.config.ts ==="
+          cat vite.config.ts
+
+      - name: Check file structure
+        run: |
+          echo "=== src/lib directory ==="
+          ls -la src/lib/
+          echo "=== src/contexts directory ==="
+          ls -la src/contexts/
+
       - name: Build project
         run: npm run build
+        env:
+          NODE_ENV: production
+          CI: true
 
       - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
