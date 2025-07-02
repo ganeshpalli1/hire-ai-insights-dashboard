@@ -228,6 +228,7 @@ export const VideoInterview: React.FC = () => {
       video.loop = true;
       video.playsInline = true;
       video.autoplay = false; // Don't autoplay until we explicitly call play
+      video.crossOrigin = 'anonymous'; // Enable CORS for external videos
       
       // Add event listeners for debugging
       video.addEventListener('loadstart', () => {
@@ -291,26 +292,26 @@ export const VideoInterview: React.FC = () => {
         updateVideoStatus('Buffering...');
       });
       
-      // Try multiple video formats/approaches
+      // Try multiple video sources with fallback options
       const tryLoadVideo = async () => {
         try {
-          // First, test if the video file is accessible
-          console.log('Testing video file accessibility...');
-          updateVideoStatus('Testing access...');
-          const response = await fetch('/ai-avatar.mp4', { method: 'HEAD' });
-          console.log('Video file response:', response.status, response.statusText);
+          updateVideoStatus('Setting up video...');
           
-          if (response.ok) {
-            console.log('✅ Video file is accessible, setting source');
-            updateVideoStatus('Setting source...');
-            video.src = '/ai-avatar.mp4';
-            video.load();
-          } else {
-            throw new Error(`Video file not accessible: ${response.status}`);
-          }
+          // Use the Azure Blob Storage URL for the AI avatar video
+          const aiAvatarVideoUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
+          
+          console.log('Loading AI Avatar video from Azure Blob Storage...');
+          updateVideoStatus('Loading AI Avatar...');
+          
+          // Set the video source directly to the blob URL
+          video.src = aiAvatarVideoUrl;
+          video.load();
+          
+          console.log('Video source set to:', aiAvatarVideoUrl);
+          
         } catch (error) {
-          console.error('❌ Failed to access video file:', error);
-          updateVideoStatus('File not found');
+          console.error('❌ Failed to set up video:', error);
+          updateVideoStatus('Setup failed');
           
           // Show fallback immediately
           const fallback = document.getElementById('ai-avatar-fallback');
@@ -1246,18 +1247,24 @@ export const VideoInterview: React.FC = () => {
                       console.log('Video readyState:', video.readyState);
                       console.log('Video networkState:', video.networkState);
                       
-                      try {
-                        // Test video accessibility
-                        const response = await fetch('/ai-avatar.mp4', { method: 'HEAD' });
-                        console.log('✅ Video accessibility test:', response.status, response.statusText);
-                        
-                        // Try to play
-                        video.muted = true;
-                        await video.play();
-                        console.log('✅ Manual video play successful');
-                      } catch (error) {
-                        console.error('❌ Manual video test failed:', error);
-                      }
+                                              try {
+                          // Test video accessibility from Azure Blob Storage
+                          const blobUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
+                          console.log('Testing Azure Blob Storage video:', blobUrl);
+                          
+                          const response = await fetch(blobUrl, { method: 'HEAD' });
+                          console.log('✅ Video accessibility test:', response.status, response.statusText);
+                          console.log('Content-Type:', response.headers.get('content-type'));
+                          console.log('Content-Length:', response.headers.get('content-length'));
+                          
+                          // Set video source and try to play
+                          video.src = blobUrl;
+                          video.muted = true;
+                          await video.play();
+                          console.log('✅ Manual video play successful from Azure Blob Storage');
+                        } catch (error) {
+                          console.error('❌ Manual video test failed:', error);
+                        }
                     }
                   }}
                   className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-md transition-colors"

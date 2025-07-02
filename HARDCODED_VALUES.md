@@ -19,6 +19,12 @@ All environment variables have been hardcoded directly into the source code for 
   - `src/components/WebhookSetupGuide.tsx` (line 15)
 - **Purpose**: Backend API endpoint for all data operations
 
+### AI Avatar Video URL
+- **Value**: `https://pdf1.blob.core.windows.net/pdf/0426.mp4`
+- **File**: `src/pages/VideoInterview.tsx`
+- **Storage**: Azure Blob Storage
+- **Note**: Video is hosted externally to avoid Azure Static Web Apps limitations
+
 ## Files Modified
 
 ### ✅ Primary Changes
@@ -81,3 +87,13 @@ Make sure your ElevenLabs agent (`agent_01jw4mdjgvef2rmm7e3kgnsrzp`) is:
 ---
 
 **Status**: Ready for production deployment! 🚀 
+
+## Future Considerations
+
+If you need to change any of these values:
+1. Search for the old value across the codebase
+2. Replace with the new value
+3. Rebuild the application
+4. Deploy the updated build
+
+For production deployments, consider implementing environment variables or a configuration service. 
