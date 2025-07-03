@@ -227,7 +227,7 @@ export const VideoInterview: React.FC = () => {
       video.muted = true;
       video.loop = true;
       video.playsInline = true;
-      video.autoplay = false; // Don't autoplay until we explicitly call play
+      video.autoplay = true; // Don't autoplay until we explicitly call play
       
       // Add event listeners for debugging
       video.addEventListener('loadstart', () => {
@@ -325,84 +325,19 @@ export const VideoInterview: React.FC = () => {
     }
   }, []);
 
-  // Control AI avatar video playback with better error handling
+  // Handle interview end - reset video state
   useEffect(() => {
-    if (aiVideoRef.current) {
+    if (aiVideoRef.current && !interviewStarted) {
       const video = aiVideoRef.current;
+      console.log('AI Video: Interview ended, resetting video');
+      video.pause();
+      video.currentTime = 0;
       
-      if (interviewStarted) {
-        console.log('AI Video: Starting interview, attempting to play video');
-        
-        const playVideo = async () => {
-          try {
-            // Check if video is ready
-            if (video.readyState < 2) { // HAVE_CURRENT_DATA
-              console.log('AI Video: Waiting for video to be ready...');
-              
-              // Wait for video to be ready or timeout
-              await new Promise((resolve) => {
-                const onReady = () => {
-                  console.log('AI Video: Video is now ready');
-                  video.removeEventListener('canplay', onReady);
-                  video.removeEventListener('loadeddata', onReady);
-                  resolve(true);
-                };
-                
-                video.addEventListener('canplay', onReady);
-                video.addEventListener('loadeddata', onReady);
-                
-                // Timeout after 5 seconds
-                setTimeout(() => {
-                  video.removeEventListener('canplay', onReady);
-                  video.removeEventListener('loadeddata', onReady);
-                  resolve(false);
-                }, 5000);
-              });
-            }
-            
-            // Ensure video properties are set
-            video.muted = true;
-            video.loop = true;
-            video.volume = 0;
-            
-            // Try to play
-            console.log('AI Video: Attempting to play...');
-            await video.play();
-            console.log('✅ AI Video: Successfully started playing');
-            
-          } catch (error) {
-            console.error('❌ AI Video: Failed to play:', error);
-            
-            // Show fallback content
-            const fallback = document.getElementById('ai-avatar-fallback');
-            if (fallback) {
-              fallback.style.display = 'flex';
-              console.log('Showing fallback content due to play failure');
-            }
-            
-            // Try again after user interaction
-            setTimeout(() => {
-              console.log('AI Video: Retrying play after delay...');
-              video.play().catch(retryError => {
-                console.error('AI Video: Retry also failed:', retryError);
-              });
-            }, 1000);
-          }
-        };
-        
-        playVideo();
-        
-      } else {
-        console.log('AI Video: Interview ended, pausing video');
-        video.pause();
-        video.currentTime = 0;
-        
-        // Hide fallback and show video element
-        const fallback = document.getElementById('ai-avatar-fallback');
-        if (fallback) {
-          fallback.style.display = 'none';
-          video.style.display = 'block';
-        }
+      // Hide fallback and show video element
+      const fallback = document.getElementById('ai-avatar-fallback');
+      if (fallback) {
+        fallback.style.display = 'none';
+        video.style.display = 'block';
       }
     }
   }, [interviewStarted]);
@@ -526,6 +461,87 @@ export const VideoInterview: React.FC = () => {
     volume,
     micMuted
   });
+
+  // Control AI avatar video playback - only when AI is speaking
+  useEffect(() => {
+    if (aiVideoRef.current && interviewStarted) {
+      const video = aiVideoRef.current;
+      
+      if (conversation.isSpeaking) {
+        console.log('AI Video: AI started speaking, playing avatar video');
+        
+        const playVideo = async () => {
+          try {
+            // Check if video is ready
+            if (video.readyState < 2) { // HAVE_CURRENT_DATA
+              console.log('AI Video: Waiting for video to be ready...');
+              
+              // Wait for video to be ready or timeout
+              await new Promise((resolve) => {
+                const onReady = () => {
+                  console.log('AI Video: Video is now ready');
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
+                  resolve(true);
+                };
+                
+                video.addEventListener('canplay', onReady);
+                video.addEventListener('loadeddata', onReady);
+                
+                // Timeout after 5 seconds
+                setTimeout(() => {
+                  video.removeEventListener('canplay', onReady);
+                  video.removeEventListener('loadeddata', onReady);
+                  resolve(false);
+                }, 5000);
+              });
+            }
+            
+            // Ensure video properties are set
+            video.muted = true;
+            video.loop = true;
+            video.volume = 0;
+            
+            // Try to play
+            console.log('AI Video: Attempting to play while AI is speaking...');
+            await video.play();
+            console.log('✅ AI Video: Successfully started playing during AI speech');
+            
+          } catch (error) {
+            console.error('❌ AI Video: Failed to play:', error);
+            
+            // Show fallback content
+            const fallback = document.getElementById('ai-avatar-fallback');
+            if (fallback) {
+              fallback.style.display = 'flex';
+              console.log('Showing fallback content due to play failure');
+            }
+            
+            // Try again after user interaction
+            setTimeout(() => {
+              console.log('AI Video: Retrying play after delay...');
+              video.play().catch(retryError => {
+                console.error('AI Video: Retry also failed:', retryError);
+              });
+            }, 1000);
+          }
+        };
+        
+        playVideo();
+        
+      } else {
+        console.log('AI Video: AI stopped speaking, pausing avatar video');
+        video.pause();
+        
+        // Hide fallback and show video element (but paused)
+        const fallback = document.getElementById('ai-avatar-fallback');
+        if (fallback) {
+          fallback.style.display = 'none';
+          video.style.display = 'block';
+        }
+      }
+    }
+  }, [interviewStarted, conversation.isSpeaking]);
 
   // Handle incoming messages from AI
   const handleMessage = (message: any) => {
@@ -1192,6 +1208,19 @@ export const VideoInterview: React.FC = () => {
                       </div>
                       <h3 className="text-lg font-semibold mb-2">Ready to Start</h3>
                       <p className="text-sm text-white/80">Click "Start Interview" to begin</p>
+                    </div>
+                  </div>
+                )}
+                
+                {/* AI Speaking status overlay */}
+                {interviewStarted && !conversation.isSpeaking && (
+                  <div className="absolute inset-0 bg-black/30 flex items-center justify-center rounded-lg">
+                    <div className="text-center text-white">
+                      <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
+                        <span className="text-2xl">🤖</span>
+                      </div>
+                      <h3 className="text-lg font-semibold mb-2">AI Interviewer</h3>
+                      <p className="text-sm text-white/80">Listening to your response...</p>
                     </div>
                   </div>
                 )}
