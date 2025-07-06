@@ -44,7 +44,6 @@ export const VideoInterview: React.FC = () => {
   const [analysisRunning, setAnalysisRunning] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [cameraReady, setCameraReady] = useState(false);
   
   // Fullscreen and anti-cheating state
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -342,45 +341,6 @@ export const VideoInterview: React.FC = () => {
       }
     }
   }, [interviewStarted]);
-
-  // Initialize camera when page loads
-  useEffect(() => {
-    const initializeCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { 
-            width: { ideal: 1280 }, 
-            height: { ideal: 720 },
-            facingMode: 'user'
-          },
-          audio: false // We'll request audio separately for ElevenLabs
-        });
-        
-        setCameraStream(stream);
-        setCameraReady(true);
-        
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-        }
-        
-        console.log('Camera initialized successfully');
-      } catch (error) {
-        console.error('Error accessing camera:', error);
-        toast.error('Camera access denied', {
-          description: 'Please allow camera access to continue with the interview.',
-        });
-      }
-    };
-
-    initializeCamera();
-
-    // Cleanup function
-    return () => {
-      if (cameraStream) {
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
-    };
-  }, []);
 
   // Get session ID from URL on component mount
   useEffect(() => {
@@ -724,9 +684,23 @@ export const VideoInterview: React.FC = () => {
     }
   }, [interviewStarted, timer]);
 
+  // Camera access (VIDEO ONLY - no audio to prevent feedback)
+  useEffect(() => {
+    if (!interviewStarted) return;
+    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
+      .then((stream) => setCameraStream(stream))
+      .catch((err) => console.error('Camera error:', err));
+    return () => {
+      cameraStream?.getTracks().forEach((track) => track.stop());
+    };
+    // eslint-disable-next-line
+  }, [interviewStarted]);
 
-
-
+  useEffect(() => {
+    if (videoRef.current && cameraStream) {
+      videoRef.current.srcObject = cameraStream;
+    }
+  }, [cameraStream]);
 
   // Timer formatting
   const formatTime = (seconds: number) => {
@@ -745,14 +719,6 @@ export const VideoInterview: React.FC = () => {
   // Start interview with AI
   const startInterview = async () => {
     try {
-      // Check if camera is ready first
-      if (!cameraReady) {
-        toast.error('Camera not ready', {
-          description: 'Please wait for camera initialization to complete.',
-        });
-        return;
-      }
-
       // Request microphone access ONLY for ElevenLabs (separate from camera)
       await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
       
@@ -1162,23 +1128,10 @@ export const VideoInterview: React.FC = () => {
         <div className="flex w-full max-w-7xl gap-6 mb-6 items-center justify-center">
           {/* Left: Camera feed */}
           <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center min-h-[540px] max-w-[48%] relative" style={{height: '540px'}}>
-            {cameraReady ? (
+            {interviewStarted ? (
               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400 text-lg">
-                <div className="text-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
-                  <div>Initializing camera...</div>
-                </div>
-              </div>
-            )}
-            
-            {/* Camera status indicator */}
-            {cameraReady && (
-              <div className="absolute top-4 left-4 bg-green-100 text-green-700 px-3 py-1 rounded-full text-sm font-medium flex items-center gap-2">
-                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                Camera Active
-              </div>
+              <div className="w-full h-full flex items-center justify-center text-gray-400 text-lg">Camera preview</div>
             )}
             
             {/* Microphone controls */}
@@ -1380,12 +1333,8 @@ export const VideoInterview: React.FC = () => {
         {/* Start / End buttons */}
         {!interviewStarted ? (
           <div className="w-full flex justify-center mt-8">
-            <Button 
-              onClick={startInterview} 
-              disabled={!cameraReady}
-              className="px-10 py-4 text-xl font-bold rounded-xl shadow bg-blue-700 hover:bg-blue-800 text-white disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {cameraReady ? 'Start Interview' : 'Preparing Camera...'}
+            <Button onClick={startInterview} className="px-10 py-4 text-xl font-bold rounded-xl shadow bg-blue-700 hover:bg-blue-800 text-white">
+              Start Interview
             </Button>
           </div>
         ) : (
