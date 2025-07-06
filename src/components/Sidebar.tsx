@@ -31,8 +31,8 @@ export const Sidebar: React.FC = () => {
       <div className="p-4">
         <div className="flex items-center justify-between mb-8">
           {!isCollapsed && (
-            <h1 className="text-xl font-bold bg-gradient-to-r from-blue-200 to-white bg-clip-text text-transparent">
-              RecruitAI Pro
+            <h1 className="text-xl font-bold bg-gradient-to-r from-orange-200 to-white bg-clip-text text-transparent">
+              Utilitarian Labs
             </h1>
           )}
           <button

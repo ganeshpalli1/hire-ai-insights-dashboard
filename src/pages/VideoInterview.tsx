@@ -958,8 +958,11 @@ export const VideoInterview: React.FC = () => {
       {/* Header */}
       <div className="w-full max-w-7xl flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
-          <img src="/logo.png" alt="Logo" className="h-10 w-10" />
-          <span className="text-3xl font-bold text-[#2a3990] tracking-tight">JOB SPRING</span>
+          <img src="/utilitarian-labs-logo.png" alt="Utilitarian Labs Logo" className="h-12 w-auto" />
+          <div className="flex flex-col">
+            <span className="text-2xl font-bold text-[#ff6b35] tracking-tight">Utilitarian Labs</span>
+            <span className="text-sm text-gray-600 -mt-1">Accelerating Excellence</span>
+          </div>
         </div>
         <div className="flex-1 flex flex-col items-center">
           {/* Session info or Progress bar */}
