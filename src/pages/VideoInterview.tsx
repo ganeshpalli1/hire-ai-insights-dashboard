@@ -957,7 +957,7 @@ export const VideoInterview: React.FC = () => {
     <div className="min-h-screen bg-[#f7f8fa] flex flex-col items-center px-4 py-6">
       {/* Header */}
       <div className="w-full max-w-7xl flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 ml-6">
           <div className="flex flex-col">
             <span className="text-2xl font-bold text-[#ff6b35] tracking-tight">Utilitarian Labs</span>
             <span className="text-sm text-gray-600 -mt-1">Accelerating Excellence</span>
