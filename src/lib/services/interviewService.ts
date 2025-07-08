@@ -1,7 +1,7 @@
 import { supabase } from '../supabase';
 import type { InterviewSetup, InterviewSetupInsert, InterviewSetupUpdate, CandidateType, CandidateLevel, InterviewSession, InterviewSessionInsert } from '../../types/database';
 
-const API_BASE_URL = 'https://backendb2b.azurewebsites.net'; // Hardcoded API base URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net'; // Use environment variable or fallback to Azure backend
 
 export class InterviewService {
   // Create a new interview setup

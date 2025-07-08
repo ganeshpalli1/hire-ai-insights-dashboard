@@ -1,5 +1,5 @@
 // API Service for Resume Screening Backend Integration
-const API_BASE_URL = 'https://backendb2b.azurewebsites.net'; // Hardcoded API base URL
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net'; // Use environment variable or fallback to Azure backend
 
 // Types matching the backend models
 export interface JobDescriptionInput {
@@ -71,6 +71,7 @@ export interface InterviewSetupMatrixResponse {
 export interface ResumeAnalysisResult {
   resume_id: string;
   filename: string;
+  candidate_name?: string; // LLM-extracted candidate name (optional for backward compatibility)
   classification: ResumeClassification;
   fit_score: number;
   matching_skills: string[];

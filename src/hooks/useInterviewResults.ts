@@ -26,8 +26,31 @@ export interface InterviewResult {
   system_recommendation: string;
   raw_analysis: any;
   security_violations: any;
+  recording_url?: string;
   created_at: string;
   updated_at: string;
+  // New domain-centric fields
+  domain_knowledge_insights?: string;
+  technical_competency_analysis?: {
+    strengths: string[];
+    weaknesses: string[];
+    depth_rating: string;
+  };
+  problem_solving_approach?: string;
+  relevant_experience_assessment?: string;
+  knowledge_gaps?: string[];
+  interview_performance_metrics?: {
+    response_quality: string;
+    technical_accuracy: string;
+    examples_provided: string;
+    clarity_of_explanation: string;
+  };
+  behavioral_analysis?: {
+    confidence_level: string;
+    cheating_detected: boolean;
+    body_language: string;
+    speech_pattern: string;
+  };
 }
 
 export interface JobWithResults {

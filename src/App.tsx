@@ -13,6 +13,7 @@ import { Candidates } from './pages/Candidates';
 import { Analytics } from './pages/Analytics';
 import { Settings } from './pages/Settings';
 import { VideoInterview } from './pages/VideoInterview';
+import { UploadProgress } from './pages/UploadProgress';
 
 // Create a client
 const queryClient = new QueryClient({
@@ -29,7 +30,7 @@ const AppContent: React.FC = () => {
   const location = useLocation();
   
   // Routes that should not have the navbar/sidebar
-  const noLayoutRoutes = ['/videointerview', '/video-interview'];
+  const noLayoutRoutes = ['/videointerview', '/video-interview', '/upload-progress'];
   const shouldHideLayout = noLayoutRoutes.includes(location.pathname);
 
   const routes = (
@@ -45,6 +46,7 @@ const AppContent: React.FC = () => {
       <Route path="/settings" element={<Settings />} />
       <Route path="/videointerview" element={<VideoInterview />} />
       <Route path="/video-interview" element={<VideoInterview />} />
+      <Route path="/upload-progress" element={<UploadProgress />} />
     </Routes>
   );
 

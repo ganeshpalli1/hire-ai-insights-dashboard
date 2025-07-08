@@ -7,6 +7,7 @@ import ResumeScreeningApi, {
   ProcessingStatus,
   JobResultsResponse 
 } from '../lib/api';
+import { getJobsWithApplicantCounts, getJobApplicantCount } from '../lib/services/jobService';
 import { toast } from 'sonner';
 
 interface JobWithId extends Job {
@@ -43,13 +44,45 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const loadExistingJobs = async () => {
       try {
         setIsLoadingInitialData(true);
-        console.log('Loading existing jobs from database...');
+        console.log('Loading existing jobs with applicant counts from database...');
         
+        // Try to use the new Supabase service first
+        try {
+          const jobsWithCounts = await getJobsWithApplicantCounts();
+          console.log('Loaded jobs with applicant counts from Supabase:', jobsWithCounts);
+          
+          // Transform Supabase data to match our JobWithId interface
+          const transformedJobs: JobWithId[] = jobsWithCounts.map(job => ({
+            id: job.id,
+            job_role: job.job_role,
+            required_experience: job.required_experience,
+            description: job.job_description,
+            created_at: job.created_at,
+            analysis: job.job_description_analysis,
+            dateCreated: new Date(job.created_at).toISOString().split('T')[0],
+            status: job.job_description_analysis ? 'Active' : 'Processing',
+            applicants: job.applicant_count,
+          }));
+          
+          setJobs(transformedJobs);
+          setJobIds(transformedJobs.map(job => job.id));
+          
+          if (transformedJobs.length > 0) {
+            toast.success(`Loaded ${transformedJobs.length} jobs with applicant counts from database`);
+          }
+          
+        } catch (supabaseError) {
+          console.warn('Supabase loading failed, falling back to API:', supabaseError);
+          
+          // Fallback to the original API method
         const jobsData = await ResumeScreeningApi.getAllJobs();
-        console.log('Loaded existing jobs:', jobsData);
+          console.log('Loaded existing jobs from API:', jobsData);
         
-        // Transform API data to match our JobWithId interface
-        const transformedJobs: JobWithId[] = jobsData.map(job => ({
+          // Transform API data and get applicant counts
+          const transformedJobs: JobWithId[] = await Promise.all(
+            jobsData.map(async (job) => {
+              const applicantCount = await getJobApplicantCount(job.id || '');
+              return {
           id: job.id || '',
           job_role: job.job_role,
           required_experience: job.required_experience,
@@ -58,14 +91,17 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           analysis: job.analysis,
           dateCreated: new Date(job.created_at).toISOString().split('T')[0],
           status: job.analysis ? 'Active' : 'Processing',
-          applicants: 0, // TODO: Get actual count from resume results
-        }));
+                applicants: applicantCount,
+              };
+            })
+          );
         
         setJobs(transformedJobs);
         setJobIds(transformedJobs.map(job => job.id));
         
         if (transformedJobs.length > 0) {
-          toast.success(`Loaded ${transformedJobs.length} existing jobs from database`);
+            toast.success(`Loaded ${transformedJobs.length} jobs with applicant counts from API`);
+          }
         }
         
       } catch (error) {
@@ -241,13 +277,42 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const refreshJobs = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['jobs'] });
-    // Reload jobs from backend
+    // Reload jobs from backend with applicant counts
     const loadExistingJobs = async () => {
       try {
         setIsLoadingInitialData(true);
-        const jobsData = await ResumeScreeningApi.getAllJobs();
+        console.log('Refreshing jobs with applicant counts...');
         
-        const transformedJobs: JobWithId[] = jobsData.map(job => ({
+        // Try to use the new Supabase service first
+        try {
+          const jobsWithCounts = await getJobsWithApplicantCounts();
+          console.log('Refreshed jobs with applicant counts from Supabase:', jobsWithCounts);
+          
+          const transformedJobs: JobWithId[] = jobsWithCounts.map(job => ({
+            id: job.id,
+            job_role: job.job_role,
+            required_experience: job.required_experience,
+            description: job.job_description,
+            created_at: job.created_at,
+            analysis: job.job_description_analysis,
+            dateCreated: new Date(job.created_at).toISOString().split('T')[0],
+            status: job.job_description_analysis ? 'Active' : 'Processing',
+            applicants: job.applicant_count,
+          }));
+          
+          setJobs(transformedJobs);
+          setJobIds(transformedJobs.map(job => job.id));
+          
+        } catch (supabaseError) {
+          console.warn('Supabase refresh failed, falling back to API:', supabaseError);
+          
+          // Fallback to the original API method
+          const jobsData = await ResumeScreeningApi.getAllJobs();
+        
+          const transformedJobs: JobWithId[] = await Promise.all(
+            jobsData.map(async (job) => {
+              const applicantCount = await getJobApplicantCount(job.id || '');
+              return {
           id: job.id || '',
           job_role: job.job_role,
           required_experience: job.required_experience,
@@ -256,11 +321,14 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           analysis: job.analysis,
           dateCreated: new Date(job.created_at).toISOString().split('T')[0],
           status: job.analysis ? 'Active' : 'Processing',
-          applicants: 0,
-        }));
+                applicants: applicantCount,
+              };
+            })
+          );
         
         setJobs(transformedJobs);
         setJobIds(transformedJobs.map(job => job.id));
+        }
         
       } catch (error) {
         console.error('Error refreshing jobs:', error);

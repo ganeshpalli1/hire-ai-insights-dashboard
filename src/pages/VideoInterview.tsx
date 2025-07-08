@@ -1,12 +1,14 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Button } from '../components/ui/button';
-import { FaMicrophone, FaClock, FaMicrophoneSlash, FaExpand, FaCompress } from 'react-icons/fa';
+import { FaMicrophone, FaClock, FaMicrophoneSlash, FaExpand, FaCompress, FaVideo, FaUpload } from 'react-icons/fa';
 import { useConversation } from '@11labs/react';
 import { InterviewService } from '../lib/services';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/card';
+import { screenRecorder } from '../lib/services/screenRecordingService';
+import { azureBlobService } from '../lib/services/azureBlobService';
 
 const INTERVIEW_DURATION = 15 * 60; // 15 minutes in seconds
 
@@ -44,6 +46,15 @@ export const VideoInterview: React.FC = () => {
   const [analysisRunning, setAnalysisRunning] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  
+  // Screen recording state
+  const [recordingState, setRecordingState] = useState<any>({
+    isRecording: false,
+    duration: 0,
+    error: null
+  });
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [isUploading, setIsUploading] = useState(false);
   
   // Fullscreen and anti-cheating state
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -297,7 +308,7 @@ export const VideoInterview: React.FC = () => {
           updateVideoStatus('Setting up video...');
           
           // Use the Azure Blob Storage URL for the AI avatar video
-          const aiAvatarVideoUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
+          const aiAvatarVideoUrl = 'https://pdf1.blob.core.windows.net/interviewvideo/ai-avatar.mp4';
           
           console.log('Loading AI Avatar video from Azure Blob Storage...');
           updateVideoStatus('Loading AI Avatar...');
@@ -351,6 +362,62 @@ export const VideoInterview: React.FC = () => {
       loadInterviewSession(sessionId);
     }
   }, []);
+
+  // Initialize recording services
+  useEffect(() => {
+    const initializeServices = async () => {
+      try {
+        // Initialize screen recording
+        const recordingSupported = await screenRecorder.initializeRecording();
+        if (!recordingSupported) {
+          console.warn('⚠️ Screen recording not supported in this browser');
+          toast.warning('Screen recording not supported in this browser');
+        }
+
+        // Test Azure Blob Storage connectivity first
+        console.log('🧪 Testing Azure Storage connectivity...');
+        const connectivityTest = await azureBlobService.testConnection();
+        
+        if (connectivityTest) {
+          // Initialize Azure Blob Storage
+          const storageInitialized = await azureBlobService.initialize();
+          if (!storageInitialized) {
+            console.warn('⚠️ Azure Storage initialization failed');
+            toast.warning('Video storage initialization failed - recordings will not be saved');
+          } else {
+            console.log('✅ Azure Storage ready for recording uploads');
+          }
+        } else {
+          console.warn('⚠️ Azure Storage connectivity test failed');
+          toast.warning('Video storage not accessible - recordings will not be saved');
+        }
+
+        console.log('✅ Recording services initialized');
+      } catch (error) {
+        console.error('❌ Failed to initialize recording services:', error);
+      }
+    };
+
+    initializeServices();
+  }, []);
+
+  // Update recording state periodically
+  useEffect(() => {
+    if (!recordingState.isRecording) return;
+
+    const interval = setInterval(() => {
+      const state = screenRecorder.getState();
+      const duration = screenRecorder.getRecordingDuration();
+      
+      setRecordingState({
+        isRecording: state.isRecording,
+        duration: duration,
+        error: state.error
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [recordingState.isRecording]);
 
   const loadInterviewSession = async (sessionId: string) => {
     setLoadingSession(true);
@@ -576,7 +643,8 @@ export const VideoInterview: React.FC = () => {
         
         // Optionally update the session if we have one
         if (sessionData?.session_id) {
-          fetch(`https://backendb2b.azurewebsites.net/api/interviews/${sessionData.session_id}/update-conversation`, {
+          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+          fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/update-conversation`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ conversation_id: msgConvId })
@@ -684,17 +752,33 @@ export const VideoInterview: React.FC = () => {
     }
   }, [interviewStarted, timer]);
 
-  // Camera access (VIDEO ONLY - no audio to prevent feedback)
+  // Camera access (VIDEO ONLY - no audio to prevent feedback) - Start immediately when page loads
   useEffect(() => {
-    if (!interviewStarted) return;
-    navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-      .then((stream) => setCameraStream(stream))
-      .catch((err) => console.error('Camera error:', err));
-    return () => {
-      cameraStream?.getTracks().forEach((track) => track.stop());
+    const initializeCamera = async () => {
+      try {
+        console.log('Requesting camera access...');
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        setCameraStream(stream);
+        console.log('✅ Camera access granted and stream started');
+      } catch (err) {
+        console.error('❌ Camera error:', err);
+        toast.error('Camera access required', {
+          description: 'Please allow camera access for the video interview.',
+        });
+      }
     };
-    // eslint-disable-next-line
-  }, [interviewStarted]);
+
+    // Start camera immediately when component loads
+    initializeCamera();
+
+    // Cleanup function to stop camera when component unmounts
+    return () => {
+      if (cameraStream) {
+        console.log('Stopping camera stream...');
+        cameraStream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []); // Empty dependency array means this runs once when component mounts
 
   useEffect(() => {
     if (videoRef.current && cameraStream) {
@@ -719,11 +803,65 @@ export const VideoInterview: React.FC = () => {
   // Start interview with AI
   const startInterview = async () => {
     try {
-      // Request microphone access ONLY for ElevenLabs (separate from camera)
+      // Step 1: Request microphone access for ElevenLabs conversation
       await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
       
-      // Enter fullscreen mode for anti-cheating
+      // Step 2: Request screen recording permission BEFORE entering fullscreen
+      console.log('🎬 Requesting screen recording permission...');
+      
+      // Show reminder about system audio
+      toast.info('🎤 Screen Recording Permission', {
+        description: '✅ Please select your screen and enable "Share audio" to record the AI interviewer\'s voice!',
+        duration: 6000
+      });
+      
+      // Start recording (this will show the permission dialog)
+      const recordingStarted = await screenRecorder.startRecording();
+      
+      if (!recordingStarted) {
+        console.warn('⚠️ Failed to start screen recording');
+        toast.error('Screen recording permission denied', {
+          description: 'Screen recording is required for the interview. Please reload and try again.',
+          duration: 5000
+        });
+        return; // Don't proceed without recording
+      }
+      
+      // Step 3: NOW enter fullscreen mode (after permission is granted)
+      console.log('🔒 Entering fullscreen mode...');
       await enterFullscreen();
+      
+      // Give a moment for fullscreen to fully activate
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Verify we're in fullscreen
+      const isInFullscreen = !!(
+        document.fullscreenElement ||
+        (document as any).webkitFullscreenElement ||
+        (document as any).msFullscreenElement
+      );
+      
+      if (!isInFullscreen) {
+        console.warn('⚠️ Failed to enter fullscreen, retrying...');
+        await enterFullscreen();
+      }
+      
+      // Recording is already started, just update the state
+      setRecordingState({
+        isRecording: true,
+        duration: 0,
+        error: null
+      });
+      console.log('✅ Screen recording started successfully');
+      
+      // Check recording state to see if system audio was captured
+      const recordingStateInfo = screenRecorder.getState();
+      console.log('📊 Recording state:', recordingStateInfo);
+      
+      toast.success('🎥 Interview started', {
+        description: 'You are now in secure fullscreen mode.',
+        duration: 3000
+      });
       
       // Get agent ID - hardcoded ElevenLabs agent ID
       const agentId = 'agent_01jw4mdjgvef2rmm7e3kgnsrzp'; // Hardcoded ElevenLabs agent ID
@@ -733,7 +871,8 @@ export const VideoInterview: React.FC = () => {
       
       // Try to get signed URL from backend first, then fallback to direct agent ID
       try {
-        const response = await fetch(`/api/elevenlabs/signed-url?agentId=${agentId}`);
+        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+        const response = await fetch(`${apiBaseUrl}/api/elevenlabs/signed-url?agentId=${agentId}`);
         
         if (response.ok) {
           const { signed_url } = await response.json();
@@ -841,49 +980,85 @@ export const VideoInterview: React.FC = () => {
         await exitFullscreen();
       }
       
-      // Trigger backend analysis if we have a session id
-      if (sessionData?.session_id) {
-        setAnalysisRunning(true);
-        toast.info('Interview completed – analyzing your responses...');
-        
+      let recordingBlob: Blob | null = null;
+      
+      // Stop screen recording
+      if (recordingState.isRecording) {
+        console.log('⏹️ Stopping screen recording...');
         try {
-          // Filter out duplicate messages from transcript
+          recordingBlob = await screenRecorder.stopRecording();
+          console.log(`📁 Recording size: ${recordingBlob ? (recordingBlob.size / 1024 / 1024).toFixed(2) : 0} MB`);
+        } catch (recordingError) {
+          console.error('❌ Error stopping recording:', recordingError);
+          toast.error('Failed to stop recording', {
+            description: 'But your interview data is safe.',
+          });
+        }
+      }
+      
+      // If we have session data and recording, navigate to upload progress page
+      if (sessionData?.session_id && recordingBlob) {
+        toast.info('Interview completed!', {
+          description: 'Processing your recording...',
+        });
+        
+        // Navigate to upload progress page with all necessary data
+        navigate('/upload-progress', {
+          state: {
+            recordingBlob,
+            sessionData,
+            recordingDuration: recordingState.duration,
+            transcript,
+            cheatingFlags,
+            fullscreenExitCount
+          }
+        });
+      } else if (sessionData?.session_id) {
+        // No recording but have session data - go directly to results
+        toast.info('Interview completed!', {
+          description: 'Redirecting to results...',
+        });
+        
+        // Try to send transcript for analysis even without recording
+        try {
           const filteredTranscript = transcript.filter((entry, index, arr) => {
-            // Check if this exact message appears earlier in the array
             const firstIndex = arr.findIndex(e => 
               e.speaker === entry.speaker && 
               e.text === entry.text
             );
-            // Keep only the first occurrence
             return firstIndex === index;
           });
           
-          // Convert transcript to text format
-          const transcriptText = filteredTranscript
-            .map(entry => `${entry.speaker === 'agent' ? 'AI' : 'USER'}: ${entry.text}`)
-            .join('\n');
+          // Handle empty transcript case
+          let transcriptText = '';
+          let startTime = new Date();
+          let endTime = new Date();
+          let durationSeconds = 0;
           
-          console.log('Sending transcript for analysis:', {
-            totalMessages: transcript.length,
-            filteredMessages: filteredTranscript.length,
-            duplicatesRemoved: transcript.length - filteredTranscript.length
-          });
+          if (filteredTranscript.length > 0) {
+            transcriptText = filteredTranscript
+              .map(entry => `${entry.speaker === 'agent' ? 'AI' : 'USER'}: ${entry.text}`)
+              .join('\n');
+            startTime = filteredTranscript[0]?.timestamp || new Date();
+            endTime = filteredTranscript[filteredTranscript.length - 1]?.timestamp || new Date();
+            durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
+          } else {
+            // Create minimal transcript for incomplete interview
+            console.log('No transcript entries found - creating minimal transcript');
+            transcriptText = 'USER: Interview ended early.\nAI: Interview was terminated before completion.';
+            durationSeconds = 1; // Minimal duration
+          }
           
-          // Calculate interview duration
-          const startTime = filteredTranscript[0]?.timestamp || new Date();
-          const endTime = filteredTranscript[filteredTranscript.length - 1]?.timestamp || new Date();
-          const durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
-          
-          // Send transcript directly to backend
-          const response = await fetch(`https://backendb2b.azurewebsites.net/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
+          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+          const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               transcript: transcriptText,
-              transcript_entries: filteredTranscript,
+              transcript_entries: filteredTranscript.length > 0 ? filteredTranscript : [],
               started_at: startTime.toISOString(),
               ended_at: endTime.toISOString(),
-              duration_seconds: durationSeconds,
+              duration_seconds: durationSeconds || 1,
               cheating_flags: cheatingFlags,
               fullscreen_exit_count: fullscreenExitCount
             })
@@ -891,52 +1066,28 @@ export const VideoInterview: React.FC = () => {
           
           if (!response.ok) {
             const errorData = await response.json();
-            throw new Error(errorData.error || 'Failed to analyze interview');
-          }
-          
-          const analysisResult = await response.json();
-          
-          // Log security violations if any
-          if (cheatingFlags.length > 0) {
-            console.warn('Security violations detected:', cheatingFlags);
-            toast.warning(`⚠️ ${cheatingFlags.length} security violation(s) recorded during interview`, {
-              description: 'These have been included in your interview report.',
+            console.error('Analysis API error:', errorData);
+            toast.warning('Interview analysis may be incomplete', {
+              description: 'But you can still view the results.',
             });
           }
-          
-          toast.success('Interview analysis completed successfully!', {
-            description: 'Redirecting to your results...',
-          });
-          
-          // Store the analysis result ID if available
-          const resultId = analysisResult?.data?.id || sessionData.session_id;
-          
-          // Redirect to results page with a slight delay
-          setTimeout(() => {
-            navigate(`/interview-results?session=${resultId}`);
-          }, 2000);
-          
         } catch (err) {
           console.error('Analysis error:', err);
-          
-          toast.error('Failed to analyze interview', {
-            description: 'Please contact support if the issue persists.',
+          toast.warning('Interview analysis failed', {
+            description: 'But you can still view available results.',
           });
-          
-          // Still redirect but with a longer delay
-          setTimeout(() => {
-            navigate(`/interview-results?session=${sessionData.session_id}`);
-          }, 3000);
-        } finally {
-          setAnalysisRunning(false);
-          setShowCompleted(true);
         }
+        
+        // Always navigate to results, even if analysis failed
+        navigate(`/interview-results?session=${sessionData.session_id}`);
       } else {
         // No session data - just end the interview
         toast.info('Interview ended');
+        navigate('/dashboard');
       }
+      
     } catch (err) {
-      console.error('Error ending conversation:', err);
+      console.error('Error ending interview:', err);
       toast.error('Error ending interview', {
         description: 'Please contact support if the issue persists.',
       });
@@ -947,6 +1098,11 @@ export const VideoInterview: React.FC = () => {
     setTranscript([]);
     setCurrentTranscript('');
     setConversationId(null);
+    setRecordingState({
+      isRecording: false,
+      duration: 0,
+      error: null
+    });
     
     // Reset anti-cheating counters
     setFullscreenExitCount(0);
@@ -1093,6 +1249,26 @@ export const VideoInterview: React.FC = () => {
                   <span className="text-xs">⚠️ Security Violations: {fullscreenExitCount}</span>
                 </div>
               )}
+              
+              {/* Recording Status Indicator */}
+              {recordingState.isRecording && (
+                <div className="flex items-center gap-2 bg-red-100 px-3 py-1 rounded-full border border-red-300">
+                  <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-sm font-medium text-red-700">
+                    REC {Math.floor(recordingState.duration / 60)}:{String(recordingState.duration % 60).padStart(2, '0')}
+                  </span>
+                </div>
+              )}
+              
+              {/* Upload Progress Indicator */}
+              {isUploading && (
+                <div className="flex items-center gap-2 bg-blue-100 px-3 py-1 rounded-full border border-blue-300">
+                  <FaUpload className="text-blue-600 text-xs animate-bounce" />
+                  <span className="text-sm font-medium text-blue-700">
+                    Uploading {uploadProgress}%
+                  </span>
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {!isFullscreen && (
@@ -1128,10 +1304,18 @@ export const VideoInterview: React.FC = () => {
         <div className="flex w-full max-w-7xl gap-6 mb-6 items-center justify-center">
           {/* Left: Camera feed */}
           <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center min-h-[540px] max-w-[48%] relative" style={{height: '540px'}}>
-            {interviewStarted ? (
+            {cameraStream ? (
               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400 text-lg">Camera preview</div>
+              <div className="w-full h-full flex items-center justify-center text-gray-400 text-lg">
+                <div className="text-center">
+                  <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
+                    <span className="text-2xl">📹</span>
+                  </div>
+                  <p className="text-lg text-gray-500 mb-2">Camera Loading...</p>
+                  <p className="text-sm text-gray-400">Please allow camera access when prompted</p>
+                </div>
+              </div>
             )}
             
             {/* Microphone controls */}
@@ -1263,45 +1447,6 @@ export const VideoInterview: React.FC = () => {
             <div className="flex items-center gap-2 text-sm text-gray-600">
               <span className={`w-2 h-2 rounded-full ${conversation.status === 'connected' ? 'bg-green-500' : 'bg-gray-400'}`} />
               {conversation.status}
-              <div className="flex gap-2 ml-4">
-                <Button onClick={addTestTranscript} variant="outline" size="sm" className="text-xs">
-                Test Transcript
-              </Button>
-                <Button 
-                  onClick={async () => {
-                    if (aiVideoRef.current) {
-                      const video = aiVideoRef.current;
-                      console.log('🧪 Manual video test initiated');
-                      console.log('Video element:', video);
-                      console.log('Video src:', video.src);
-                      console.log('Video readyState:', video.readyState);
-                      console.log('Video networkState:', video.networkState);
-                      
-                                              try {
-                          // Test video accessibility from Azure Blob Storage
-                          const blobUrl = 'https://pdf1.blob.core.windows.net/pdf/0426.mp4';
-                          console.log('Testing Azure Blob Storage video:', blobUrl);
-                          
-                          const response = await fetch(blobUrl, { method: 'HEAD' });
-                          console.log('✅ Video accessibility test:', response.status, response.statusText);
-                          console.log('Content-Type:', response.headers.get('content-type'));
-                          console.log('Content-Length:', response.headers.get('content-length'));
-                          
-                          // Set video source and try to play
-                          video.src = blobUrl;
-                          video.muted = true;
-                          await video.play();
-                          console.log('✅ Manual video play successful from Azure Blob Storage');
-                        } catch (error) {
-                          console.error('❌ Manual video test failed:', error);
-                        }
-                    }
-                  }}
-                  className="px-3 py-1 bg-blue-500 hover:bg-blue-600 text-white text-sm rounded-md transition-colors"
-                >
-                  Test Video
-                </Button>
-              </div>
             </div>
           </div>
           <div className="space-y-3">
@@ -1333,7 +1478,10 @@ export const VideoInterview: React.FC = () => {
         {/* Start / End buttons */}
         {!interviewStarted ? (
           <div className="w-full flex justify-center mt-8">
-            <Button onClick={startInterview} className="px-10 py-4 text-xl font-bold rounded-xl shadow bg-blue-700 hover:bg-blue-800 text-white">
+            <Button 
+              onClick={startInterview} 
+              className="px-10 py-4 text-xl font-bold rounded-xl shadow bg-blue-700 hover:bg-blue-800 text-white"
+            >
               Start Interview
             </Button>
           </div>

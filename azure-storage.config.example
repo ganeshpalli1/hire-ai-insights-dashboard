@@ -1,0 +1,23 @@
+# Azure Storage Configuration for Interview Recordings
+# Copy these values to your .env file
+
+# Azure Storage Account Configuration
+VITE_AZURE_STORAGE_ACCOUNT=your-storage-account-name
+VITE_AZURE_STORAGE_SAS_TOKEN=your-sas-token-without-question-mark
+
+# Example values (replace with your actual values):
+# VITE_AZURE_STORAGE_ACCOUNT=interviewrecordings2024
+# VITE_AZURE_STORAGE_SAS_TOKEN=sv=2023-01-03&ss=b&srt=sco&sp=rwdlacupx&se=2025-12-31T23:59:59Z&st=2024-01-01T00:00:00Z&spr=https&sig=YourSignatureHere
+
+# Other existing environment variables
+VITE_API_BASE_URL=https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
+
+# Note: The SAS token should NOT include the leading '?' character
+# It should start with 'sv=' not '?sv='
+
+# Quick Setup Instructions:
+# 1. Follow AZURE_STORAGE_SETUP.md to create your storage account
+# 2. Generate a SAS token with read, write, delete, list permissions
+# 3. Copy these values to your .env file
+# 4. Install dependencies: npm install @azure/storage-blob
+# 5. Test your setup with the provided test script 

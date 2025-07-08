@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { PageHeader } from '../components/PageHeader';
-import { ChevronDownIcon, ChevronRightIcon, UsersIcon, StarIcon, BriefcaseIcon, ComputerDesktopIcon, UserGroupIcon, AcademicCapIcon, PencilIcon, CheckIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ChevronDownIcon, ChevronRightIcon, UsersIcon, StarIcon, BriefcaseIcon, ComputerDesktopIcon, UserGroupIcon, AcademicCapIcon, PencilIcon, CheckIcon, XMarkIcon, CloudArrowUpIcon, DocumentArrowUpIcon, TrashIcon, CheckCircleIcon } from '@heroicons/react/24/outline';
 import { useJobs } from '../contexts/JobContext';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Avatar, AvatarFallback } from '../components/ui/avatar';
 import { toast } from 'sonner';
-import { ResumeAnalysisResult, JobResultsResponse } from '../lib/api';
+import { ResumeAnalysisResult, JobResultsResponse, ProcessingStatus } from '../lib/api';
 import { InterviewService } from '../lib/services';
 import { useUpdateResumeResult } from '../hooks/useResumes';
 import type { CandidateType, CandidateLevel } from '../types/database';
@@ -27,7 +27,15 @@ export const ResumeResults: React.FC = () => {
     expiresAt: string;
   } | null>(null);
   const [showLinkModal, setShowLinkModal] = useState(false);
-  const { jobs, getJobResults } = useJobs();
+  
+  // Upload functionality state
+  const [uploadedFiles, setUploadedFiles] = useState<Record<string, File[]>>({});
+  const [isUploading, setIsUploading] = useState<Record<string, boolean>>({});
+  const [uploadComplete, setUploadComplete] = useState<Record<string, boolean>>({});
+  const [processingStatus, setProcessingStatus] = useState<Record<string, ProcessingStatus | null>>({});
+  const [showUploadSection, setShowUploadSection] = useState<Record<string, boolean>>({});
+  
+  const { jobs, getJobResults, uploadResumes, pollProcessingStatus } = useJobs();
   const updateResumeResult = useUpdateResumeResult();
 
   // Category and level options for dropdowns
@@ -225,9 +233,9 @@ export const ResumeResults: React.FC = () => {
     return levelMap[level as keyof typeof levelMap] || level;
   };
 
-  const getInitials = (filename: string) => {
-    // Try to extract name from filename
-    const name = filename.replace(/\.(pdf|doc|docx)$/i, '').replace(/[_-]/g, ' ');
+  const getInitials = (candidate: ResumeAnalysisResult) => {
+    // Use candidate_name if available, otherwise fall back to filename
+    const name = candidate.candidate_name || candidate.filename.replace(/\.(pdf|doc|docx)$/i, '').replace(/[_-]/g, ' ');
     const words = name.split(' ').filter(word => word.length > 0);
     if (words.length >= 2) {
       return (words[0][0] + words[1][0]).toUpperCase();
@@ -245,6 +253,79 @@ export const ResumeResults: React.FC = () => {
       return levelMap[classification.level as keyof typeof levelMap] || classification.level;
     }
     return 'Experience not specified';
+  };
+
+  const handleFileUpload = (jobId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const files = Array.from(e.target.files);
+      setUploadedFiles(prev => ({ ...prev, [jobId]: [...(prev[jobId] || []), ...files] }));
+    }
+  };
+
+  const handleFolderUpload = (jobId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const files = Array.from(e.target.files).filter(file => 
+        file.type === 'application/pdf' || 
+        file.type === 'application/msword' || 
+        file.type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+        file.name.toLowerCase().endsWith('.pdf') ||
+        file.name.toLowerCase().endsWith('.doc') ||
+        file.name.toLowerCase().endsWith('.docx')
+      );
+      setUploadedFiles(prev => ({ ...prev, [jobId]: files }));
+      
+      if (files.length === 0) {
+        toast.warning('No resume files found in the selected folder');
+      }
+    }
+  };
+
+  const handleRemoveFile = (jobId: string, index: number) => {
+    setUploadedFiles(prev => ({
+      ...prev,
+      [jobId]: prev[jobId]?.filter((_, i) => i !== index) || []
+    }));
+  };
+
+  const handleUploadResumes = async (jobId: string) => {
+    const files = uploadedFiles[jobId];
+    if (!files || files.length === 0) {
+      toast.error('Please select resumes to upload');
+      return;
+    }
+
+    setIsUploading(prev => ({ ...prev, [jobId]: true }));
+    try {
+      // Convert File[] to FileList
+      const fileList = new DataTransfer();
+      files.forEach(file => fileList.items.add(file));
+      
+      await uploadResumes(jobId, fileList.files);
+      setUploadComplete(prev => ({ ...prev, [jobId]: true }));
+      
+      // Start polling for processing status
+      await pollProcessingStatus(jobId, (status) => {
+        setProcessingStatus(prev => ({ ...prev, [jobId]: status }));
+      });
+      
+      toast.success('Resume processing completed!');
+      
+      // Refresh job results
+      loadJobResults(jobId);
+      
+      // Clear uploaded files
+      setUploadedFiles(prev => ({ ...prev, [jobId]: [] }));
+      
+    } catch (error) {
+      console.error('Error uploading resumes:', error);
+      toast.error('Failed to upload resumes');
+    } finally {
+      setIsUploading(prev => ({ ...prev, [jobId]: false }));
+    }
+  };
+
+  const toggleUploadSection = (jobId: string) => {
+    setShowUploadSection(prev => ({ ...prev, [jobId]: !prev[jobId] }));
   };
 
   return (
@@ -324,6 +405,140 @@ export const ResumeResults: React.FC = () => {
                       </div>
                     ) : (
                       <div className="space-y-4">
+                        {/* Add More Candidates Button */}
+                        <div className="flex justify-between items-center mb-4">
+                          <div className="flex items-center space-x-2">
+                            <h4 className="text-lg font-semibold text-gray-900">Candidates</h4>
+                            <Badge variant="secondary" className="bg-blue-50 text-blue-700 border-blue-200">
+                              {jobResults[job.id]?.length || 0} analyzed
+                            </Badge>
+                          </div>
+                          <Button 
+                            onClick={() => toggleUploadSection(job.id)}
+                            variant="outline"
+                            size="sm"
+                            className="flex items-center space-x-2 border-blue-200 text-blue-700 hover:bg-blue-50"
+                          >
+                            <CloudArrowUpIcon className="w-4 h-4" />
+                            <span>Add More Candidates</span>
+                          </Button>
+                        </div>
+
+                        {/* Upload Section */}
+                        {showUploadSection[job.id] && (
+                          <div className="bg-white border border-gray-200 rounded-lg p-6 mb-6">
+                            <div className="flex items-center justify-between mb-4">
+                              <h5 className="text-lg font-semibold text-gray-900">Upload New Resumes</h5>
+                              {uploadComplete[job.id] && (
+                                <div className="flex items-center text-green-600">
+                                  <CheckCircleIcon className="w-5 h-5 mr-2" />
+                                  <span className="text-sm font-medium">Upload Complete</span>
+                                </div>
+                              )}
+                            </div>
+                            
+                            {!uploadComplete[job.id] && (
+                              <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                      Select Individual Files
+                                    </label>
+                                    <input
+                                      type="file"
+                                      multiple
+                                      accept=".pdf,.doc,.docx"
+                                      onChange={(e) => handleFileUpload(job.id, e)}
+                                      className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none focus:border-blue-500 p-3"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                                      Select from Folder
+                                    </label>
+                                    <input
+                                      type="file"
+                                      multiple
+                                      accept=".pdf,.doc,.docx"
+                                      onChange={(e) => handleFolderUpload(job.id, e)}
+                                      className="block w-full text-sm text-gray-900 border border-gray-300 rounded-lg cursor-pointer bg-gray-50 focus:outline-none focus:border-blue-500 p-3"
+                                    />
+                                  </div>
+                                </div>
+
+                                {/* File List */}
+                                {uploadedFiles[job.id] && uploadedFiles[job.id].length > 0 && (
+                                  <div className="bg-gray-50 rounded-lg p-4">
+                                    <h6 className="text-sm font-medium text-gray-700 mb-3">
+                                      Selected Files ({uploadedFiles[job.id].length})
+                                    </h6>
+                                    <div className="space-y-2 max-h-40 overflow-y-auto">
+                                      {uploadedFiles[job.id].map((file, index) => (
+                                        <div key={index} className="flex items-center justify-between bg-white rounded-lg p-3 border">
+                                          <div className="flex items-center space-x-3">
+                                            <DocumentArrowUpIcon className="w-5 h-5 text-blue-600" />
+                                            <span className="text-sm font-medium text-gray-900">{file.name}</span>
+                                            <span className="text-xs text-gray-500">({Math.round(file.size / 1024)}KB)</span>
+                                          </div>
+                                          <button
+                                            onClick={() => handleRemoveFile(job.id, index)}
+                                            className="text-red-600 hover:text-red-700"
+                                          >
+                                            <TrashIcon className="w-4 h-4" />
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {/* Upload Button */}
+                                <div className="flex justify-end space-x-3">
+                                  <Button
+                                    onClick={() => toggleUploadSection(job.id)}
+                                    variant="outline"
+                                    className="border-gray-300 text-gray-700 hover:bg-gray-50"
+                                  >
+                                    Cancel
+                                  </Button>
+                                  <Button
+                                    onClick={() => handleUploadResumes(job.id)}
+                                    disabled={isUploading[job.id] || !uploadedFiles[job.id] || uploadedFiles[job.id].length === 0}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                                  >
+                                    {isUploading[job.id] ? (
+                                      <div className="flex items-center">
+                                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                                        Processing...
+                                      </div>
+                                    ) : (
+                                      'Upload & Process Resumes'
+                                    )}
+                                  </Button>
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Processing Status */}
+                            {processingStatus[job.id] && (
+                              <div className="mt-4 bg-blue-50 rounded-lg p-4">
+                                <div className="flex items-center justify-between mb-2">
+                                  <span className="text-sm font-medium text-blue-900">Processing Progress</span>
+                                  <span className="text-sm text-blue-700">
+                                    {processingStatus[job.id]?.processed_resumes || 0} / {processingStatus[job.id]?.total_resumes || 0}
+                                  </span>
+                                </div>
+                                <div className="w-full bg-blue-200 rounded-full h-2">
+                                  <div 
+                                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                                    style={{ width: `${processingStatus[job.id]?.completion_percentage || 0}%` }}
+                                  ></div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
                         {/* Classification Summary */}
                         {jobResults[job.id] && jobResults[job.id].length > 0 && (
                           <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
@@ -392,12 +607,12 @@ export const ResumeResults: React.FC = () => {
                                 <div className="flex items-center space-x-3">
                                   <Avatar className="h-11 w-11">
                                     <AvatarFallback className="bg-gradient-to-br from-blue-500 to-blue-600 text-white font-semibold text-sm">
-                                      {getInitials(candidate.filename)}
+                                      {getInitials(candidate)}
                                     </AvatarFallback>
                                   </Avatar>
                                   <div>
                                     <h4 className="font-semibold text-gray-900 text-lg">
-                                      {candidate.filename.replace(/\.(pdf|doc|docx)$/i, '').replace(/[_-]/g, ' ')}
+                                      {candidate.candidate_name || candidate.filename.replace(/\.(pdf|doc|docx)$/i, '').replace(/[_-]/g, ' ')}
                                     </h4>
                                     <div className="flex items-center text-sm text-gray-600 mt-1 space-x-3">
                                       <span className="flex items-center">
@@ -620,7 +835,8 @@ export const ResumeResults: React.FC = () => {
                       value={generatedLink.url}
                       readOnly
                       onClick={(e) => {
-                        e.target.select();
+                        const target = e.target as HTMLInputElement;
+                        target.select();
                         navigator.clipboard.writeText(generatedLink.url);
                         toast.success('Link copied to clipboard!');
                       }}
