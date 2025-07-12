@@ -14,7 +14,7 @@ VITE_API_BASE_URL=https://your-backend-url.com
 
 **Example:**
 ```bash
-VITE_API_BASE_URL=https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
+VITE_API_BASE_URL=http://localhost:8000
 ```
 
 ## 📂 Files Containing Backend URL References
@@ -83,7 +83,7 @@ VITE_API_BASE_URL=https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azure
 If you need to change the fallback URLs (when environment variable is not set):
 
 1. Update the fallback URL in each file listed above
-2. Replace `'CURRENT_FALLBACK_URL'` with `'https://your-new-backend-url.com'`
+2. Replace `'http://localhost:8000'` with `'https://your-new-backend-url.com'`
 3. Rebuild the application
 
 ## 📋 Current Backend Configuration
@@ -94,7 +94,7 @@ URL: https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
 ```
 
 ### Previously Used URLs
-- `http://localhost:8000` (Local development)
+- `https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net` (Previous Azure deployment)
 - `https://backendb2b.azurewebsites.net` (Previous Azure deployment)
 - `https://hire-ai-rg-backend-gafpbjhkdgemdsfp.southindia-01.azurewebsites.net` (Previous Azure deployment)
 
@@ -146,8 +146,14 @@ grep -r "azurewebsites.net" .
 
 ## 📝 Changelog
 
-### 2024-01-XX - Current Update
+### 2025-01-XX - Latest Update (MIGRATION TO AZURE)
 - Updated all fallback URLs from `http://localhost:8000` to `https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net`
+- Changed configuration from local development backend to Azure production backend
+- Updated 6 core application files and 1 test script
+- Docker health checks intentionally kept as localhost (correct behavior)
+- Updated comprehensive documentation for backend URL management
+
+### 2024-01-XX - Previous Update
 - Added comprehensive documentation for backend URL management
 
 ---

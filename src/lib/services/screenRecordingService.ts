@@ -33,9 +33,10 @@ interface RecordingState {
 export class ScreenRecordingService {
   private mediaRecorder: MediaRecorder | null = null;
   private recordedChunks: Blob[] = [];
-  private screenStream: MediaStream | null = null;
+  public screenStream: MediaStream | null = null; // Made public to check audio tracks
   private audioStream: MediaStream | null = null;
   private combinedStream: MediaStream | null = null;
+  private persistRecording: boolean = false; // Flag to prevent accidental cleanup
   private state: RecordingState = {
     isRecording: false,
     isPaused: false,
@@ -169,6 +170,14 @@ export class ScreenRecordingService {
   }
 
   /**
+   * Set persist flag to prevent accidental cleanup during navigation
+   */
+  setPersistRecording(persist: boolean): void {
+    this.persistRecording = persist;
+    console.log(`🔒 Recording persistence set to: ${persist}`);
+  }
+
+  /**
    * Stop recording and prepare for upload
    */
   async stopRecording(): Promise<Blob | null> {
@@ -177,6 +186,9 @@ export class ScreenRecordingService {
         console.warn('No active recording to stop');
         return null;
       }
+      
+      // Reset persist flag when explicitly stopping
+      this.persistRecording = false;
 
       console.log('⏹️ Stopping screen recording...');
 
@@ -308,7 +320,12 @@ export class ScreenRecordingService {
     if (this.screenStream) {
       this.screenStream.getVideoTracks()[0].onended = () => {
         console.log('🔚 Screen sharing ended by user');
-        this.stopRecording();
+        // Only stop if not persisting
+        if (!this.persistRecording) {
+          this.stopRecording();
+        } else {
+          console.log('🔒 Recording persisted - not stopping automatically');
+        }
       };
     }
   }
@@ -318,8 +335,14 @@ export class ScreenRecordingService {
    */
   private async cleanupStreams(): Promise<void> {
     try {
+      console.log('🧹 Starting stream cleanup...');
+      console.trace('Cleanup called from:'); // This will show the call stack
+      
       if (this.screenStream) {
-        this.screenStream.getTracks().forEach(track => track.stop());
+        this.screenStream.getTracks().forEach(track => {
+          console.log(`🛑 Stopping track: ${track.kind} - ${track.label}`);
+          track.stop();
+        });
         this.screenStream = null;
       }
 

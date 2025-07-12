@@ -1,11 +1,11 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Button } from '../components/ui/button';
-import { FaMicrophone, FaClock, FaMicrophoneSlash, FaExpand, FaCompress, FaVideo, FaUpload } from 'react-icons/fa';
+import { FaMicrophone, FaClock, FaMicrophoneSlash, FaExpand, FaCompress, FaVideo, FaUpload, FaCheckCircle, FaSpinner } from 'react-icons/fa';
 import { useConversation } from '@11labs/react';
 import { InterviewService } from '../lib/services';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Card, CardContent } from '../components/ui/card';
 import { screenRecorder } from '../lib/services/screenRecordingService';
 import { azureBlobService } from '../lib/services/azureBlobService';
@@ -43,8 +43,8 @@ export const VideoInterview: React.FC = () => {
   const [sessionData, setSessionData] = useState<any>(null);
   const [loadingSession, setLoadingSession] = useState(false);
   const [customPrompt, setCustomPrompt] = useState<string>('');
-  const [analysisRunning, setAnalysisRunning] = useState(false);
-  const [showCompleted, setShowCompleted] = useState(false);
+  const [showThankYou, setShowThankYou] = useState(false);
+  const [backgroundUploadStatus, setBackgroundUploadStatus] = useState<'idle' | 'uploading' | 'analyzing' | 'complete' | 'error'>('idle');
   const [conversationId, setConversationId] = useState<string | null>(null);
   
   // Screen recording state
@@ -65,6 +65,10 @@ export const VideoInterview: React.FC = () => {
   const [warningTimerActive, setWarningTimerActive] = useState(false);
   
   const navigate = useNavigate();
+  const location = useLocation();
+  
+  // Check if permissions were already granted
+  const permissionsPreGranted = location.state?.permissionsGranted || false;
 
   // AI interviewer questions for demo
   const aiQuestions = [
@@ -418,6 +422,23 @@ export const VideoInterview: React.FC = () => {
 
     return () => clearInterval(interval);
   }, [recordingState.isRecording]);
+  
+  // Prevent accidental tab closing during upload/analysis
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (backgroundUploadStatus === 'uploading' || backgroundUploadStatus === 'analyzing') {
+        e.preventDefault();
+        e.returnValue = 'Your interview is still being saved. Are you sure you want to leave?';
+        return 'Your interview is still being saved. Are you sure you want to leave?';
+      }
+    };
+    
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [backgroundUploadStatus]);
 
   const loadInterviewSession = async (sessionId: string) => {
     setLoadingSession(true);
@@ -756,10 +777,18 @@ export const VideoInterview: React.FC = () => {
   useEffect(() => {
     const initializeCamera = async () => {
       try {
+        // Check if camera stream was already created in InterviewInstructions
+        if (permissionsPreGranted && (window as any).cameraStream) {
+          console.log('Using pre-granted camera stream');
+          setCameraStream((window as any).cameraStream);
+          console.log('✅ Camera stream restored from previous permissions');
+        } else {
+          // Request camera access if not pre-granted
         console.log('Requesting camera access...');
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         setCameraStream(stream);
         console.log('✅ Camera access granted and stream started');
+        }
       } catch (err) {
         console.error('❌ Camera error:', err);
         toast.error('Camera access required', {
@@ -776,6 +805,10 @@ export const VideoInterview: React.FC = () => {
       if (cameraStream) {
         console.log('Stopping camera stream...');
         cameraStream.getTracks().forEach((track) => track.stop());
+      }
+      // Also clean up the window.cameraStream reference
+      if ((window as any).cameraStream) {
+        (window as any).cameraStream = undefined;
       }
     };
   }, []); // Empty dependency array means this runs once when component mounts
@@ -803,31 +836,80 @@ export const VideoInterview: React.FC = () => {
   // Start interview with AI
   const startInterview = async () => {
     try {
-      // Step 1: Request microphone access for ElevenLabs conversation
-      await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
-      
-      // Step 2: Request screen recording permission BEFORE entering fullscreen
-      console.log('🎬 Requesting screen recording permission...');
-      
-      // Show reminder about system audio
-      toast.info('🎤 Screen Recording Permission', {
-        description: '✅ Please select your screen and enable "Share audio" to record the AI interviewer\'s voice!',
-        duration: 6000
-      });
-      
-      // Start recording (this will show the permission dialog)
-      const recordingStarted = await screenRecorder.startRecording();
-      
-      if (!recordingStarted) {
-        console.warn('⚠️ Failed to start screen recording');
-        toast.error('Screen recording permission denied', {
-          description: 'Screen recording is required for the interview. Please reload and try again.',
-          duration: 5000
+      // Step 1: Check if permissions were already granted
+      if (!permissionsPreGranted) {
+        // Request microphone access for ElevenLabs conversation if not pre-granted
+        console.log('🎤 Requesting microphone access...');
+        await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true } });
+        
+        // Request screen recording permission BEFORE entering fullscreen
+        console.log('🎬 Requesting screen recording permission...');
+        
+        // Show reminder about system audio
+        toast.info('🎤 Screen Recording Permission', {
+          description: '✅ Please select your screen and enable "Share audio" to record the AI interviewer\'s voice!',
+          duration: 6000
         });
-        return; // Don't proceed without recording
+        
+        // Start recording (this will show the permission dialog)
+        const recordingStarted = await screenRecorder.startRecording();
+        
+        if (!recordingStarted) {
+          console.warn('⚠️ Failed to start screen recording');
+          toast.error('Screen recording permission denied', {
+            description: 'Screen recording is required for the interview. Please reload and try again.',
+            duration: 5000
+          });
+          return; // Don't proceed without recording
+        }
+      } else {
+        // Permissions were pre-granted, just verify recording is active
+        console.log('✅ Using pre-granted permissions - no new requests needed');
+        console.log('📍 Navigation state received:', location.state);
+        
+        // Add a small delay to ensure the recording state is stable
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Check if recording is already active from InterviewInstructions
+        const currentState = screenRecorder.getState();
+        console.log('📊 Current recording state:', currentState);
+        console.log('🔍 Detailed state check:', {
+          isRecording: currentState.isRecording,
+          hasError: currentState.error,
+          screenStream: (screenRecorder as any).screenStream ? 'EXISTS' : 'NULL',
+          mediaRecorder: (screenRecorder as any).mediaRecorder ? 'EXISTS' : 'NULL'
+        });
+        
+        if (!currentState.isRecording) {
+          // Recording was stopped somehow, this is an error condition
+          console.error('❌ Recording was stopped unexpectedly');
+          console.error('📊 Full state dump:', JSON.stringify(currentState, null, 2));
+          
+          toast.error('Recording Error', {
+            description: 'Screen recording was stopped. Please go back and grant permissions again.',
+            duration: 5000
+          });
+          
+          // Navigate back to instructions page
+          navigate(-1);
+          return;
+        } else {
+          console.log('✅ Screen recording already active from permission phase - no action needed');
+          
+          // Clear the persist flag now that we've confirmed recording is active
+          screenRecorder.setPersistRecording(false);
+        }
       }
       
-      // Step 3: NOW enter fullscreen mode (after permission is granted)
+      // Recording is active, update the state
+      setRecordingState({
+        isRecording: true,
+        duration: screenRecorder.getRecordingDuration(),
+        error: null
+      });
+      console.log('✅ Screen recording confirmed active');
+      
+      // Step 2: NOW enter fullscreen mode (after recording is confirmed)
       console.log('🔒 Entering fullscreen mode...');
       await enterFullscreen();
       
@@ -963,6 +1045,147 @@ export const VideoInterview: React.FC = () => {
     }
   };
 
+  // Handle background upload and analysis
+  const handleBackgroundUploadAndAnalysis = async (recordingBlob: Blob, sessionData: any, recordingDuration: number) => {
+    try {
+      setBackgroundUploadStatus('uploading');
+      
+      // Update page title to show upload status
+      document.title = '⬆️ Uploading Interview... Please Wait';
+      
+      // Upload to Azure
+      const metadata = {
+        interviewId: sessionData.session_id,
+        sessionId: sessionData.session_id,
+        candidateName: sessionData.candidate_name,
+        jobTitle: sessionData.job_title || 'Unknown Position',
+        recordingDate: new Date().toISOString(),
+        fileSize: `${(recordingBlob.size / 1024 / 1024).toFixed(2)} MB`,
+        duration: `${Math.floor(recordingDuration / 60)}:${String(recordingDuration % 60).padStart(2, '0')}`
+      };
+      
+      const uploadResult = await azureBlobService.uploadLargeRecording(
+        recordingBlob,
+        metadata,
+        (progress) => {
+          console.log(`📤 Upload progress: ${progress.percentage}%`);
+        }
+      );
+      
+      if (!uploadResult.success) {
+        throw new Error(uploadResult.error || 'Upload failed');
+      }
+      
+      console.log('✅ Recording uploaded successfully:', uploadResult.blobUrl);
+      setBackgroundUploadStatus('analyzing');
+      
+      // Update page title for analysis phase
+      document.title = '🤖 Analyzing Interview... Please Wait';
+      
+      // Filter and prepare transcript
+      const filteredTranscript = transcript.filter((entry, index, arr) => {
+        const firstIndex = arr.findIndex(e => 
+          e.speaker === entry.speaker && 
+          e.text === entry.text
+        );
+        return firstIndex === index;
+      });
+      
+      const transcriptText = filteredTranscript
+        .map(entry => `${entry.speaker === 'agent' ? 'AI' : 'USER'}: ${entry.text}`)
+        .join('\n');
+      
+      const startTime = filteredTranscript[0]?.timestamp || new Date();
+      const endTime = filteredTranscript[filteredTranscript.length - 1]?.timestamp || new Date();
+      const durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
+        
+      // Send for analysis
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+      const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript: transcriptText,
+          transcript_entries: filteredTranscript,
+          started_at: startTime.toISOString(),
+          ended_at: endTime.toISOString(),
+          duration_seconds: durationSeconds,
+          cheating_flags: cheatingFlags,
+          fullscreen_exit_count: fullscreenExitCount,
+          recording_url: uploadResult.blobUrl
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to analyze interview');
+      }
+      
+      setBackgroundUploadStatus('complete');
+      console.log('✅ Interview analysis completed');
+      
+      // Update page title to show completion
+      document.title = '✅ Interview Saved - You Can Close This Tab';
+      
+    } catch (error) {
+      console.error('Error in background upload/analysis:', error);
+      setBackgroundUploadStatus('error');
+        
+      // Update page title to show error
+      document.title = '⚠️ Interview Saved (With Errors)';
+    }
+  };
+  
+  // Handle analysis without recording
+  const handleAnalysisWithoutRecording = async (sessionData: any) => {
+        try {
+          const filteredTranscript = transcript.filter((entry, index, arr) => {
+            const firstIndex = arr.findIndex(e => 
+              e.speaker === entry.speaker && 
+              e.text === entry.text
+            );
+            return firstIndex === index;
+          });
+          
+          let transcriptText = '';
+          let startTime = new Date();
+          let endTime = new Date();
+          let durationSeconds = 0;
+          
+          if (filteredTranscript.length > 0) {
+            transcriptText = filteredTranscript
+              .map(entry => `${entry.speaker === 'agent' ? 'AI' : 'USER'}: ${entry.text}`)
+              .join('\n');
+            startTime = filteredTranscript[0]?.timestamp || new Date();
+            endTime = filteredTranscript[filteredTranscript.length - 1]?.timestamp || new Date();
+            durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
+          } else {
+            transcriptText = 'USER: Interview ended early.\nAI: Interview was terminated before completion.';
+        durationSeconds = 1;
+          }
+          
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+          const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              transcript: transcriptText,
+              transcript_entries: filteredTranscript.length > 0 ? filteredTranscript : [],
+              started_at: startTime.toISOString(),
+              ended_at: endTime.toISOString(),
+              duration_seconds: durationSeconds || 1,
+              cheating_flags: cheatingFlags,
+              fullscreen_exit_count: fullscreenExitCount
+            })
+          });
+          
+          if (!response.ok) {
+        console.error('Analysis API error');
+          }
+        } catch (err) {
+          console.error('Analysis error:', err);
+    }
+  };
+
   // End interview
   const endInterview = async () => {
     try {
@@ -994,96 +1217,24 @@ export const VideoInterview: React.FC = () => {
             description: 'But your interview data is safe.',
           });
         }
-      }
-      
-      // If we have session data and recording, navigate to upload progress page
-      if (sessionData?.session_id && recordingBlob) {
-        toast.info('Interview completed!', {
-          description: 'Processing your recording...',
-        });
-        
-        // Navigate to upload progress page with all necessary data
-        navigate('/upload-progress', {
-          state: {
-            recordingBlob,
-            sessionData,
-            recordingDuration: recordingState.duration,
-            transcript,
-            cheatingFlags,
-            fullscreenExitCount
-          }
-        });
-      } else if (sessionData?.session_id) {
-        // No recording but have session data - go directly to results
-        toast.info('Interview completed!', {
-          description: 'Redirecting to results...',
-        });
-        
-        // Try to send transcript for analysis even without recording
-        try {
-          const filteredTranscript = transcript.filter((entry, index, arr) => {
-            const firstIndex = arr.findIndex(e => 
-              e.speaker === entry.speaker && 
-              e.text === entry.text
-            );
-            return firstIndex === index;
-          });
-          
-          // Handle empty transcript case
-          let transcriptText = '';
-          let startTime = new Date();
-          let endTime = new Date();
-          let durationSeconds = 0;
-          
-          if (filteredTranscript.length > 0) {
-            transcriptText = filteredTranscript
-              .map(entry => `${entry.speaker === 'agent' ? 'AI' : 'USER'}: ${entry.text}`)
-              .join('\n');
-            startTime = filteredTranscript[0]?.timestamp || new Date();
-            endTime = filteredTranscript[filteredTranscript.length - 1]?.timestamp || new Date();
-            durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
-          } else {
-            // Create minimal transcript for incomplete interview
-            console.log('No transcript entries found - creating minimal transcript');
-            transcriptText = 'USER: Interview ended early.\nAI: Interview was terminated before completion.';
-            durationSeconds = 1; // Minimal duration
-          }
-          
-          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
-          const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              transcript: transcriptText,
-              transcript_entries: filteredTranscript.length > 0 ? filteredTranscript : [],
-              started_at: startTime.toISOString(),
-              ended_at: endTime.toISOString(),
-              duration_seconds: durationSeconds || 1,
-              cheating_flags: cheatingFlags,
-              fullscreen_exit_count: fullscreenExitCount
-            })
-          });
-          
-          if (!response.ok) {
-            const errorData = await response.json();
-            console.error('Analysis API error:', errorData);
-            toast.warning('Interview analysis may be incomplete', {
-              description: 'But you can still view the results.',
-            });
-          }
-        } catch (err) {
-          console.error('Analysis error:', err);
-          toast.warning('Interview analysis failed', {
-            description: 'But you can still view available results.',
-          });
         }
         
-        // Always navigate to results, even if analysis failed
-        navigate(`/interview-results?session=${sessionData.session_id}`);
+      // If we have session data and recording, handle upload in background
+      if (sessionData?.session_id && recordingBlob) {
+        // Show thank you message
+        setShowThankYou(true);
+        
+        // Handle upload and analysis in background
+        handleBackgroundUploadAndAnalysis(recordingBlob, sessionData, recordingState.duration);
+      } else if (sessionData?.session_id) {
+        // No recording but have session data - still show thank you
+        setShowThankYou(true);
+        
+        // Try to send transcript for analysis even without recording
+        handleAnalysisWithoutRecording(sessionData);
       } else {
-        // No session data - just end the interview
-        toast.info('Interview ended');
-        navigate('/dashboard');
+        // No session data - still show thank you
+        setShowThankYou(true);
       }
       
     } catch (err) {
@@ -1110,67 +1261,116 @@ export const VideoInterview: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-[#f7f8fa] flex flex-col items-center px-4 py-6">
+    <div className="min-h-screen bg-[#f7f8fa] flex flex-col items-center px-2 sm:px-4 py-3 sm:py-6">
       {/* Header */}
-      <div className="w-full max-w-7xl flex items-center justify-between mb-4">
-        <div className="flex items-center gap-3 ml-6">
-          <div className="flex flex-col">
-            <span className="text-2xl font-bold text-[#ff6b35] tracking-tight">Utilitarian Labs</span>
-            <span className="text-sm text-gray-600 -mt-1">Accelerating Excellence</span>
+      <div className="w-full max-w-7xl flex flex-col sm:flex-row items-center justify-between mb-3 sm:mb-4 gap-3 sm:gap-0">
+        <div className="flex items-center gap-2 sm:gap-3 sm:ml-6">
+          <div className="flex flex-col text-center sm:text-left">
+            <span className="text-lg sm:text-2xl font-bold text-[#ff6b35] tracking-tight">Utilitarian Labs</span>
+            <span className="text-xs sm:text-sm text-gray-600 -mt-1">Accelerating Excellence</span>
           </div>
         </div>
-        <div className="flex-1 flex flex-col items-center">
+        <div className="flex-1 flex flex-col items-center order-first sm:order-none">
           {/* Session info or Progress bar */}
           {sessionData ? (
             <div className="text-center">
-              <h2 className="text-xl font-bold text-blue-700 mb-1">
+              <h2 className="text-lg sm:text-xl font-bold text-blue-700 mb-1 px-2">
                 Personalized Interview for {sessionData.candidate_name}
               </h2>
-              <p className="text-sm text-gray-600">
-                {sessionData.generated_questions?.questions?.length || 7} custom questions prepared
-              </p>
             </div>
           ) : (
-            <div className="flex gap-4 items-center mb-1">
+            <div className="flex flex-col sm:flex-row gap-2 sm:gap-4 items-center mb-1">
               {rounds.map((r, i) => (
                 <div key={r.name} className="flex flex-col items-center">
-                  <div className={`h-2 w-24 rounded-full ${r.active ? 'bg-blue-600' : 'bg-gray-300'}`}></div>
+                  <div className={`h-2 w-16 sm:w-24 rounded-full ${r.active ? 'bg-blue-600' : 'bg-gray-300'}`}></div>
                   <span className={`text-xs mt-1 ${r.active ? 'text-blue-700 font-semibold' : 'text-gray-500'}`}>{r.name}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
-        <div className="flex items-center gap-2 text-[#1a2343] font-semibold text-lg">
-          Total interview time : <FaClock /> <span className="font-mono">{formatTime(timer)}</span>
+        <div className="flex items-center gap-1 sm:gap-2 text-[#1a2343] font-semibold text-sm sm:text-lg">
+          <span className="hidden sm:inline">Total interview time :</span>
+          <span className="sm:hidden">Time:</span>
+          <FaClock className="text-sm sm:text-base" />
+          <span className="font-mono">{formatTime(timer)}</span>
         </div>
       </div>
 
       {/* Error Alert */}
       {error && (
-        <div className="w-full max-w-7xl mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700">
+        <div className="w-full max-w-7xl mb-3 sm:mb-4 p-3 sm:p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm sm:text-base">
           {error}
+        </div>
+      )}
+      
+      {/* Background Upload Status Banner */}
+      {backgroundUploadStatus !== 'idle' && !interviewStarted && (
+        <div className={`w-full max-w-7xl mb-3 sm:mb-4 p-3 sm:p-4 rounded-lg border-2 ${
+          backgroundUploadStatus === 'uploading' ? 'bg-blue-50 border-blue-300' :
+          backgroundUploadStatus === 'analyzing' ? 'bg-indigo-50 border-indigo-300' :
+          backgroundUploadStatus === 'complete' ? 'bg-green-50 border-green-300' :
+          'bg-red-50 border-red-300'
+        }`}>
+          <div className="flex items-center gap-2 sm:gap-3">
+            {backgroundUploadStatus === 'uploading' && (
+              <>
+                <FaUpload className="text-blue-600 text-lg sm:text-xl animate-bounce flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-blue-800 font-semibold text-sm sm:text-base">Uploading your interview recording...</p>
+                  <p className="text-blue-600 text-xs sm:text-sm">Please keep this tab open until the upload completes.</p>
+                </div>
+              </>
+            )}
+            {backgroundUploadStatus === 'analyzing' && (
+              <>
+                <FaSpinner className="text-indigo-600 text-lg sm:text-xl animate-spin flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-indigo-800 font-semibold text-sm sm:text-base">Analyzing your interview responses...</p>
+                  <p className="text-indigo-600 text-xs sm:text-sm">This may take a moment. Please do not close this tab.</p>
+                </div>
+              </>
+            )}
+            {backgroundUploadStatus === 'complete' && (
+              <>
+                <FaCheckCircle className="text-green-600 text-lg sm:text-xl flex-shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="text-green-800 font-semibold text-sm sm:text-base">Interview successfully saved!</p>
+                  <p className="text-green-600 text-xs sm:text-sm">You can now safely close this tab.</p>
+                </div>
+              </>
+            )}
+            {backgroundUploadStatus === 'error' && (
+              <>
+                <span className="text-red-600 text-lg sm:text-xl flex-shrink-0">⚠️</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-red-800 font-semibold text-sm sm:text-base">Processing error occurred</p>
+                  <p className="text-red-600 text-xs sm:text-sm">Your interview data has been saved, but analysis may be incomplete.</p>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       )}
 
       {/* Security Warning Dialog */}
       <Dialog open={showFullscreenWarning} onOpenChange={setShowFullscreenWarning}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-sm sm:max-w-md mx-4">
           <DialogHeader>
-            <DialogTitle className="text-red-600 flex items-center gap-2">
+            <DialogTitle className="text-red-600 flex items-center gap-2 text-base sm:text-lg">
               ⚠️ Critical Security Alert
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-gray-700">
+          <div className="space-y-3 sm:space-y-4">
+            <p className="text-xs sm:text-sm text-gray-700">
               You have exited fullscreen mode during the interview. This action has been recorded for security purposes.
             </p>
             
             {/* Countdown Timer */}
-            <div className="bg-red-50 p-4 rounded-lg border border-red-200">
+            <div className="bg-red-50 p-3 sm:p-4 rounded-lg border border-red-200">
               <div className="flex items-center justify-center gap-2 mb-2">
-                <FaClock className="text-red-600" />
-                <span className="text-lg font-bold text-red-600">
+                <FaClock className="text-red-600 text-sm sm:text-base" />
+                <span className="text-lg sm:text-xl font-bold text-red-600">
                   {formatWarningTime(warningTimer)}
                 </span>
               </div>
@@ -1197,7 +1397,7 @@ export const VideoInterview: React.FC = () => {
                   setWarningTimer(180);
                   enterFullscreen();
                 }} 
-                className="flex-1 bg-green-600 hover:bg-green-700"
+                className="flex-1 bg-green-600 hover:bg-green-700 text-xs sm:text-sm"
               >
                 Return to Fullscreen Now
               </Button>
@@ -1223,38 +1423,38 @@ export const VideoInterview: React.FC = () => {
 
       {/* Security Status Bar (only visible when interview is running) */}
       {interviewStarted && (
-        <div className="w-full max-w-7xl mb-4 p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+        <div className="w-full max-w-7xl mb-3 sm:mb-4 p-2 sm:p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-4">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-4">
               <div className="flex items-center gap-2">
                 <div className={`w-2 h-2 rounded-full ${isFullscreen ? 'bg-green-500' : 'bg-red-500'}`} />
-                <span className="text-sm font-medium text-gray-700">
+                <span className="text-xs sm:text-sm font-medium text-gray-700">
                   {isFullscreen ? 'Secure Mode: Active' : 'Secure Mode: Inactive'}
                 </span>
               </div>
               
               {/* Warning Timer Display */}
               {warningTimerActive && (
-                <div className="flex items-center gap-2 bg-red-100 px-3 py-1 rounded-full border border-red-300">
+                <div className="flex items-center gap-1 sm:gap-2 bg-red-100 px-2 sm:px-3 py-1 rounded-full border border-red-300">
                   <FaClock className="text-red-600 text-xs" />
-                  <span className="text-sm font-bold text-red-600">
+                  <span className="text-xs sm:text-sm font-bold text-red-600">
                     {formatWarningTime(warningTimer)}
                   </span>
-                  <span className="text-xs text-red-600">until termination</span>
+                  <span className="text-xs text-red-600 hidden sm:inline">until termination</span>
                 </div>
               )}
               
               {fullscreenExitCount > 0 && (
                 <div className="flex items-center gap-2 text-orange-600">
-                  <span className="text-xs">⚠️ Security Violations: {fullscreenExitCount}</span>
+                  <span className="text-xs">⚠️ Violations: {fullscreenExitCount}</span>
                 </div>
               )}
               
               {/* Recording Status Indicator */}
               {recordingState.isRecording && (
-                <div className="flex items-center gap-2 bg-red-100 px-3 py-1 rounded-full border border-red-300">
+                <div className="flex items-center gap-1 sm:gap-2 bg-red-100 px-2 sm:px-3 py-1 rounded-full border border-red-300">
                   <div className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-                  <span className="text-sm font-medium text-red-700">
+                  <span className="text-xs sm:text-sm font-medium text-red-700">
                     REC {Math.floor(recordingState.duration / 60)}:{String(recordingState.duration % 60).padStart(2, '0')}
                   </span>
                 </div>
@@ -1262,15 +1462,15 @@ export const VideoInterview: React.FC = () => {
               
               {/* Upload Progress Indicator */}
               {isUploading && (
-                <div className="flex items-center gap-2 bg-blue-100 px-3 py-1 rounded-full border border-blue-300">
+                <div className="flex items-center gap-1 sm:gap-2 bg-blue-100 px-2 sm:px-3 py-1 rounded-full border border-blue-300">
                   <FaUpload className="text-blue-600 text-xs animate-bounce" />
-                  <span className="text-sm font-medium text-blue-700">
-                    Uploading {uploadProgress}%
+                  <span className="text-xs sm:text-sm font-medium text-blue-700">
+                    {uploadProgress}%
                   </span>
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 self-end sm:self-auto">
               {!isFullscreen && (
                 <Button
                   onClick={() => {
@@ -1282,8 +1482,9 @@ export const VideoInterview: React.FC = () => {
                   variant="outline"
                   className={`text-xs flex items-center gap-1 ${warningTimerActive ? 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200' : ''}`}
                 >
-                  <FaExpand />
-                  {warningTimerActive ? 'Return to Secure Mode' : 'Enter Fullscreen'}
+                  <FaExpand className="text-xs" />
+                  <span className="hidden sm:inline">{warningTimerActive ? 'Return to Secure Mode' : 'Enter Fullscreen'}</span>
+                  <span className="sm:hidden">Secure</span>
                 </Button>
               )}
               <Button
@@ -1301,59 +1502,70 @@ export const VideoInterview: React.FC = () => {
 
       {/* Main content */}
       <div className="w-full max-w-7xl flex-1 flex flex-col justify-center items-center">
-        <div className="flex w-full max-w-7xl gap-6 mb-6 items-center justify-center">
+        {/* Video layout - side by side on desktop, stacked on mobile */}
+        <div className="flex flex-col lg:flex-row w-full max-w-7xl gap-3 sm:gap-4 lg:gap-6 mb-4 sm:mb-6 items-center justify-center">
           {/* Left: Camera feed */}
-          <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center min-h-[540px] max-w-[48%] relative" style={{height: '540px'}}>
+          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
+               style={{
+                 height: 'clamp(250px, 50vw, 400px)',
+                 maxHeight: '540px'
+               }}>
             {cameraStream ? (
-              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover rounded-lg sm:rounded-2xl" />
             ) : (
-              <div className="w-full h-full flex items-center justify-center text-gray-400 text-lg">
-                <div className="text-center">
-                  <div className="w-16 h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
-                    <span className="text-2xl">📹</span>
+              <div className="w-full h-full flex items-center justify-center text-gray-400">
+                <div className="text-center p-4">
+                  <div className="w-12 sm:w-16 h-12 sm:h-16 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                    <span className="text-xl sm:text-2xl">📹</span>
                   </div>
-                  <p className="text-lg text-gray-500 mb-2">Camera Loading...</p>
-                  <p className="text-sm text-gray-400">Please allow camera access when prompted</p>
+                  <p className="text-sm sm:text-lg text-gray-500 mb-2">Camera Loading...</p>
+                  <p className="text-xs sm:text-sm text-gray-400">Please allow camera access when prompted</p>
                 </div>
               </div>
             )}
             
             {/* Microphone controls */}
             {interviewStarted && (
-              <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-4">
+              <div className="absolute bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-4">
                 <button
-                  className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold shadow border-2 transition ${
+                  className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 rounded-md sm:rounded-lg text-xs sm:text-sm font-semibold shadow border-2 transition ${
                     micMuted
                       ? 'bg-red-100 text-red-700 border-red-300 hover:bg-red-200'
                       : 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200'
                   }`}
                   onClick={() => setMicMuted(!micMuted)}
                 >
-                  {micMuted ? <FaMicrophoneSlash /> : <FaMicrophone />}
-                  {micMuted ? 'Unmute' : 'Mute'}
+                  {micMuted ? <FaMicrophoneSlash className="text-xs sm:text-sm" /> : <FaMicrophone className="text-xs sm:text-sm" />}
+                  <span className="hidden sm:inline">{micMuted ? 'Unmute' : 'Mute'}</span>
                 </button>
                 {conversation.isSpeaking && (
-                  <div className="flex items-center gap-2 bg-blue-100 text-blue-700 px-4 py-2 rounded-lg font-semibold shadow border border-blue-200">
+                  <div className="flex items-center gap-1 sm:gap-2 bg-blue-100 text-blue-700 px-2 sm:px-4 py-1 sm:py-2 rounded-md sm:rounded-lg text-xs sm:text-sm font-semibold shadow border border-blue-200">
                     <div className="flex gap-1">
-                      <div className="w-1 h-3 bg-blue-500 animate-pulse" />
-                      <div className="w-1 h-3 bg-blue-500 animate-pulse delay-100" />
-                      <div className="w-1 h-3 bg-blue-500 animate-pulse delay-200" />
+                      <div className="w-1 h-2 sm:h-3 bg-blue-500 animate-pulse" />
+                      <div className="w-1 h-2 sm:h-3 bg-blue-500 animate-pulse delay-100" />
+                      <div className="w-1 h-2 sm:h-3 bg-blue-500 animate-pulse delay-200" />
                     </div>
-                    AI Speaking
+                    <span className="hidden sm:inline">AI Speaking</span>
+                    <span className="sm:hidden">AI</span>
                   </div>
                 )}
               </div>
             )}
           </div>
+          
           {/* Right: AI Avatar video */}
-          <div className="flex-1 min-w-0 bg-white rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center min-h-[540px] max-w-[48%] relative" style={{ height: '540px' }}>
+          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
+               style={{
+                 height: 'clamp(250px, 50vw, 400px)',
+                 maxHeight: '540px'
+               }}>
             {/* AI Avatar Video Area */}
-            <Card className="h-full">
-              <CardContent className="p-0 h-full relative bg-gradient-to-br from-blue-900 to-purple-900">
+            <Card className="h-full w-full">
+              <CardContent className="p-0 h-full relative bg-gradient-to-br from-blue-900 to-purple-900 rounded-lg sm:rounded-2xl">
                 {/* Video element */}
                 <video 
                   ref={aiVideoRef}
-                  className="w-full h-full object-cover rounded-lg"
+                  className="w-full h-full object-cover rounded-lg sm:rounded-2xl"
                   playsInline
                   muted
                   loop
@@ -1366,144 +1578,175 @@ export const VideoInterview: React.FC = () => {
                 {/* Fallback content for when video fails */}
                 <div 
                   id="ai-avatar-fallback"
-                  className="absolute inset-0 bg-gradient-to-br from-blue-900 to-purple-900 flex flex-col items-center justify-center text-white rounded-lg"
+                  className="absolute inset-0 bg-gradient-to-br from-blue-900 to-purple-900 flex flex-col items-center justify-center text-white rounded-lg sm:rounded-2xl"
                   style={{ display: 'none' }}
                 >
-                  <div className="w-20 h-20 rounded-full bg-white/20 flex items-center justify-center mb-4">
-                    <div className="w-12 h-12 rounded-full bg-white/30 flex items-center justify-center">
-                      <span className="text-2xl">🤖</span>
+                  <div className="w-16 sm:w-20 h-16 sm:h-20 rounded-full bg-white/20 flex items-center justify-center mb-3 sm:mb-4">
+                    <div className="w-10 sm:w-12 h-10 sm:h-12 rounded-full bg-white/30 flex items-center justify-center">
+                      <span className="text-xl sm:text-2xl">🤖</span>
                     </div>
                   </div>
-                  <h3 className="text-xl font-semibold mb-2">AI Interviewer</h3>
-                  <p className="text-sm text-white/80 text-center max-w-48">
+                  <h3 className="text-lg sm:text-xl font-semibold mb-2">AI Interviewer</h3>
+                  <p className="text-sm text-white/80 text-center max-w-48 px-4">
                     {interviewStarted ? 'Interview in progress...' : 'Ready to interview'}
                   </p>
                 </div>
-                
-                {/* Video status overlay */}
-                <div className="absolute top-4 left-4 bg-black/50 px-3 py-1 rounded-full text-white text-sm">
-                  Video Status: <span id="video-status">Loading...</span>
-                </div>
-                
-                {/* Interview status overlay */}
-                {!interviewStarted && (
-                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center rounded-lg">
-                    <div className="text-center text-white">
-                      <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
-                        <span className="text-2xl">🎯</span>
-                      </div>
-                      <h3 className="text-lg font-semibold mb-2">Ready to Start</h3>
-                      <p className="text-sm text-white/80">Click "Start Interview" to begin</p>
-                    </div>
-                  </div>
-                )}
-                
-                {/* AI Speaking status overlay */}
-                {interviewStarted && !conversation.isSpeaking && (
-                  <div className="absolute inset-0 bg-black/30 flex items-center justify-center rounded-lg">
-                    <div className="text-center text-white">
-                      <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center mx-auto mb-4">
-                        <span className="text-2xl">🤖</span>
-                      </div>
-                      <h3 className="text-lg font-semibold mb-2">AI Interviewer</h3>
-                      <p className="text-sm text-white/80">Listening to your response...</p>
-                    </div>
-                  </div>
-                )}
               </CardContent>
             </Card>
-            
-            {/* Video debug info (only in development) */}
-            {interviewStarted && aiVideoRef.current && (
-              <div className="absolute bottom-4 left-4 bg-black bg-opacity-50 text-white text-xs p-2 rounded">
-                Video: {aiVideoRef.current.readyState >= 2 ? 'Ready' : 'Loading...'}
               </div>
-            )}
-            
-            {/* Volume control */}
-            {interviewStarted && (
-              <div className="absolute top-4 right-4 bg-white bg-opacity-90 p-3 rounded-lg shadow">
-                <div className="flex items-center gap-2 text-sm">
-                  <span>Volume</span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                    value={volume}
-                    onChange={(e) => setVolume(parseFloat(e.target.value))}
-                    className="w-20"
-                  />
-                  <span>{Math.round(volume * 100)}%</span>
                 </div>
-              </div>
-            )}
-          </div>
-        </div>
+        
         {/* Bottom: Transcript */}
-        <div className="w-full max-w-7xl bg-white rounded-2xl shadow-lg p-6 mb-4 min-h-[200px]">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold text-lg">Current Conversation</h3>
-            <div className="flex items-center gap-2 text-sm text-gray-600">
+        <div className="w-full max-w-7xl bg-white rounded-lg sm:rounded-2xl shadow-lg p-4 sm:p-6 mb-4 min-h-[150px] sm:min-h-[200px]">
+          <div className="flex items-center justify-between mb-3 sm:mb-4">
+            <h3 className="font-bold text-base sm:text-lg">Current Conversation</h3>
+            <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-600">
               <span className={`w-2 h-2 rounded-full ${conversation.status === 'connected' ? 'bg-green-500' : 'bg-gray-400'}`} />
-              {conversation.status}
+              <span className="hidden sm:inline">{conversation.status}</span>
             </div>
           </div>
-          <div className="space-y-3">
+          <div className="space-y-2 sm:space-y-3 max-h-32 sm:max-h-40 overflow-y-auto">
             {transcript.length === 0 && !interviewStarted && (
-              <div className="text-center text-gray-500 py-8">Start the interview to see the current conversation</div>
+              <div className="text-center text-gray-500 py-6 sm:py-8 text-sm sm:text-base">Start the interview to see the current conversation</div>
             )}
             {interviewStarted && transcript.length === 0 && (
-              <div className="text-center text-gray-500 py-8">Waiting for conversation...</div>
+              <div className="text-center text-gray-500 py-6 sm:py-8 text-sm sm:text-base">Waiting for conversation...</div>
             )}
             {transcript.slice(-2).map((entry) => (
-              <div key={entry.id} className="flex items-start gap-3">
-                <span className={`px-2 py-1 rounded text-xs font-semibold ${
+              <div key={entry.id} className="flex items-start gap-2 sm:gap-3">
+                <span className={`px-2 py-1 rounded text-xs font-semibold flex-shrink-0 ${
                   entry.speaker === 'agent' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
                 }`}>{entry.speaker === 'agent' ? 'AI' : 'You'}</span>
-                <div className="flex-1">
-                  <p className="text-sm text-gray-700">{entry.text}</p>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs sm:text-sm text-gray-700 break-words">{entry.text}</p>
                   <span className="text-xs text-gray-500">{entry.timestamp.toLocaleTimeString()}</span>
                 </div>
               </div>
             ))}
             {currentTranscript && (
-              <div className="flex items-start gap-3 opacity-60">
-                <span className="px-2 py-1 rounded text-xs font-semibold bg-gray-100 text-gray-700">You</span>
-                <p className="text-sm text-gray-700 italic">{currentTranscript}...</p>
+              <div className="flex items-start gap-2 sm:gap-3 opacity-60">
+                <span className="px-2 py-1 rounded text-xs font-semibold bg-gray-100 text-gray-700 flex-shrink-0">You</span>
+                <p className="text-xs sm:text-sm text-gray-700 italic break-words">{currentTranscript}...</p>
               </div>
             )}
           </div>
         </div>
+        
         {/* Start / End buttons */}
         {!interviewStarted ? (
-          <div className="w-full flex justify-center mt-8">
+          <div className="w-full flex justify-center mt-4 sm:mt-8">
             <Button 
               onClick={startInterview} 
-              className="px-10 py-4 text-xl font-bold rounded-xl shadow bg-blue-700 hover:bg-blue-800 text-white"
+              className="px-6 sm:px-10 py-3 sm:py-4 text-lg sm:text-xl font-bold rounded-lg sm:rounded-xl shadow bg-blue-700 hover:bg-blue-800 text-white"
             >
               Start Interview
             </Button>
           </div>
         ) : (
           <div className="w-full flex justify-center mt-4">
-            <Button onClick={endInterview} variant="destructive" className="px-8 py-3 text-lg font-semibold rounded-xl">
+            <Button 
+              onClick={endInterview} 
+              variant="destructive" 
+              className="px-6 sm:px-8 py-2 sm:py-3 text-base sm:text-lg font-semibold rounded-lg sm:rounded-xl"
+            >
               End Interview
             </Button>
           </div>
         )}
       </div>
-      {/* Completion Dialog */}
-      <Dialog open={showCompleted || analysisRunning}>
-        <DialogContent>
+      
+      {/* Thank You Dialog */}
+      <Dialog open={showThankYou} onOpenChange={() => {}}>
+        <DialogContent className="max-w-sm sm:max-w-lg mx-4" onPointerDownOutside={(e) => e.preventDefault()} onEscapeKeyDown={(e) => e.preventDefault()}>
           <DialogHeader>
-            <DialogTitle>{analysisRunning ? 'Analysing Interview…' : 'Interview Completed!'}</DialogTitle>
+            <DialogTitle className="text-xl sm:text-2xl font-bold text-center text-green-600">
+              Thank You for Completing the Interview!
+            </DialogTitle>
           </DialogHeader>
-          {analysisRunning ? (
-            <p className="text-gray-600">Running AI evaluation of your responses, please wait…</p>
-          ) : (
-            <p className="text-gray-600">Redirecting to your results…</p>
+          <div className="space-y-4 sm:space-y-6 py-4">
+            <div className="text-center">
+              <div className="w-16 sm:w-20 h-16 sm:h-20 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-3 sm:mb-4">
+                <FaCheckCircle className="text-green-600 text-3xl sm:text-4xl" />
+              </div>
+              <h3 className="text-base sm:text-lg font-semibold mb-2">Interview Successfully Completed</h3>
+              <p className="text-sm sm:text-base text-gray-600">
+                We appreciate your time and effort in completing this interview.
+              </p>
+            </div>
+            
+            <div className="bg-blue-50 p-3 sm:p-4 rounded-lg border border-blue-200">
+              <h4 className="font-semibold text-blue-800 mb-2 text-sm sm:text-base">What Happens Next?</h4>
+              <ul className="text-xs sm:text-sm text-blue-700 space-y-1">
+                <li>• Your interview recording has been saved</li>
+                <li>• Our AI is analyzing your responses</li>
+                <li>• The hiring team will review your interview</li>
+                <li>• You will be contacted with next steps</li>
+              </ul>
+            </div>
+            
+            {/* Background Upload Status */}
+            {backgroundUploadStatus !== 'idle' && (
+              <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                <div className="flex items-center gap-2 text-xs sm:text-sm">
+                  {backgroundUploadStatus === 'uploading' && (
+                    <>
+                      <FaUpload className="text-blue-600 animate-bounce flex-shrink-0" />
+                      <span className="text-gray-700">Saving your interview recording...</span>
+                    </>
+                  )}
+                  {backgroundUploadStatus === 'analyzing' && (
+                    <>
+                      <FaSpinner className="text-blue-600 animate-spin flex-shrink-0" />
+                      <span className="text-gray-700">Processing your responses...</span>
+                    </>
+                  )}
+                  {backgroundUploadStatus === 'complete' && (
+                    <>
+                      <FaCheckCircle className="text-green-600 flex-shrink-0" />
+                      <span className="text-green-700">Interview successfully processed!</span>
+                    </>
+                  )}
+                  {backgroundUploadStatus === 'error' && (
+                    <>
+                      <span className="text-red-600 flex-shrink-0">⚠️</span>
+                      <span className="text-red-700">Processing error - but your interview is saved</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            {/* Important notice about keeping tab open */}
+            {backgroundUploadStatus !== 'complete' && backgroundUploadStatus !== 'idle' && (
+              <div className="bg-yellow-50 p-3 rounded-lg border border-yellow-300">
+                <p className="text-xs sm:text-sm font-semibold text-yellow-800 flex items-center gap-2">
+                  <span className="text-base sm:text-lg flex-shrink-0">⚠️</span>
+                  <span>Please keep this tab open while we finish processing your interview.</span>
+                </p>
+              </div>
           )}
+            
+            <div className="flex justify-center pt-2 sm:pt-4">
+              <Button 
+                onClick={() => {
+                  // Only allow closing if processing is complete
+                  if (backgroundUploadStatus === 'complete' || backgroundUploadStatus === 'error') {
+                    window.close();
+                  }
+                }}
+                disabled={backgroundUploadStatus === 'uploading' || backgroundUploadStatus === 'analyzing'}
+                className={`px-4 sm:px-6 py-2 sm:py-3 font-semibold rounded-lg text-sm sm:text-base ${
+                  backgroundUploadStatus === 'uploading' || backgroundUploadStatus === 'analyzing'
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-blue-600 hover:bg-blue-700 text-white'
+                }`}
+              >
+                {backgroundUploadStatus === 'uploading' || backgroundUploadStatus === 'analyzing' 
+                  ? 'Processing...' 
+                  : 'Close This Tab'}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

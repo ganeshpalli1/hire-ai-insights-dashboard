@@ -6,3 +6,17 @@ declare namespace React {
     directory?: string | boolean;
   }
 }
+
+// For HTMLEmbedElement type definition
+declare namespace React {
+  interface HTMLAttributes<T> extends AriaAttributes, DOMAttributes<T> {
+    // extends React's HTMLAttributes
+  }
+}
+
+// Extend Window interface to support cameraStream
+declare global {
+  interface Window {
+    cameraStream?: MediaStream;
+  }
+}

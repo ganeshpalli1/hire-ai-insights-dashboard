@@ -82,9 +82,10 @@ export const ResumeResults: React.FC = () => {
     try {
       const interviewData = await InterviewService.generateInterviewLink(candidate.resume_id);
       
-      // Construct the complete URL
+      // Construct the complete URL to go through instructions page first
       const baseUrl = window.location.origin; // Gets the current domain
-      const fullUrl = `${baseUrl}${interviewData.session_url}`;
+      const sessionId = interviewData.session_id;
+      const fullUrl = `${baseUrl}/interview-instructions?session=${sessionId}`;
       
       setGeneratedLink({
         url: fullUrl,
