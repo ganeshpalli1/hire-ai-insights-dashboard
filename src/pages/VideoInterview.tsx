@@ -956,13 +956,18 @@ export const VideoInterview: React.FC = () => {
         const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
         const response = await fetch(`${apiBaseUrl}/api/elevenlabs/signed-url?agentId=${agentId}`);
         
-        if (response.ok) {
-          const { signed_url } = await response.json();
-          console.log('Got signed URL, starting session...');
-          sessionResponse = await conversation.startSession({ signedUrl: signed_url });
-        } else {
-          throw new Error('Backend endpoint not available');
+        if (!response.ok) {
+          throw new Error('Failed to get signed URL');
         }
+        
+        const data = await response.json();
+        if (data.status === 'error') {
+          throw new Error(data.error || 'Failed to get signed URL');
+        }
+        
+        const { signed_url } = data;
+        console.log('Got signed URL, starting session...');
+        sessionResponse = await conversation.startSession({ signedUrl: signed_url });
       } catch (backendError) {
         console.log('Backend not available, trying direct agent ID:', backendError);
         console.log('Attempting to start session with agent ID:', agentId);
@@ -981,19 +986,35 @@ export const VideoInterview: React.FC = () => {
       console.log('Session response type:', typeof sessionResponse);
       console.log('Session response keys:', sessionResponse ? Object.keys(sessionResponse) : 'null');
       
-      // Try to extract conversation ID from various possible locations
-      if (sessionResponse) {
-        const possibleConvId = sessionResponse.conversationUuid || 
-                            sessionResponse.conversationId || 
-                            sessionResponse.conversation_id ||
-                            sessionResponse.id ||
-                            sessionResponse.uuid;
-                            
-        if (possibleConvId) {
-          console.log('Found conversation ID in session response:', possibleConvId);
-          setConversationId(possibleConvId);
-        } else {
-          console.warn('No conversation ID found in session response');
+      // Handle if sessionResponse is an array (ElevenLabs SDK sometimes returns array)
+      if (Array.isArray(sessionResponse) && sessionResponse.length > 0) {
+        console.log('Session response is an array, checking first element...');
+        const firstElement = sessionResponse[0];
+        if (firstElement && typeof firstElement === 'object') {
+          console.log('Using first element of array as session response');
+          sessionResponse = firstElement;
+        }
+      }
+      
+      // Handle if sessionResponse is a string (conversation ID directly)
+      if (typeof sessionResponse === 'string') {
+        console.log('Session response is a string (conversation ID):', sessionResponse);
+        setConversationId(sessionResponse);
+      } else {
+        // Try to extract conversation ID from various possible locations
+        if (sessionResponse) {
+          const possibleConvId = sessionResponse.conversationUuid || 
+                              sessionResponse.conversationId || 
+                              sessionResponse.conversation_id ||
+                              sessionResponse.id ||
+                              sessionResponse.uuid;
+                              
+          if (possibleConvId) {
+            console.log('Found conversation ID in session response:', possibleConvId);
+            setConversationId(possibleConvId);
+          } else {
+            console.warn('No conversation ID found in session response');
+          }
         }
       }
       
@@ -1259,6 +1280,25 @@ export const VideoInterview: React.FC = () => {
     setFullscreenExitCount(0);
     setCheatingFlags([]);
   };
+
+  // Cleanup effect for component unmount
+  useEffect(() => {
+    return () => {
+      // Only cleanup if the component is actually unmounting (not just re-rendering)
+      // Check if we're still in the interview flow
+      const currentPath = window.location.pathname;
+      if (!currentPath.includes('/video-interview') && conversation && conversation.status === 'connected') {
+        console.log('Component unmounting from interview page, cleaning up WebSocket connection...');
+        try {
+          conversation.endSession().catch((err) => {
+            console.warn('Cleanup endSession warning:', err);
+          });
+        } catch (err) {
+          console.warn('Cleanup error:', err);
+        }
+      }
+    };
+  }, []); // Empty dependency array to only run on actual unmount
 
   return (
     <div className="min-h-screen bg-[#f7f8fa] flex flex-col items-center px-2 sm:px-4 py-3 sm:py-6">
@@ -1527,28 +1567,7 @@ export const VideoInterview: React.FC = () => {
             {/* Microphone controls */}
             {interviewStarted && (
               <div className="absolute bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-4">
-                <button
-                  className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 rounded-md sm:rounded-lg text-xs sm:text-sm font-semibold shadow border-2 transition ${
-                    micMuted
-                      ? 'bg-red-100 text-red-700 border-red-300 hover:bg-red-200'
-                      : 'bg-green-100 text-green-700 border-green-300 hover:bg-green-200'
-                  }`}
-                  onClick={() => setMicMuted(!micMuted)}
-                >
-                  {micMuted ? <FaMicrophoneSlash className="text-xs sm:text-sm" /> : <FaMicrophone className="text-xs sm:text-sm" />}
-                  <span className="hidden sm:inline">{micMuted ? 'Unmute' : 'Mute'}</span>
-                </button>
-                {conversation.isSpeaking && (
-                  <div className="flex items-center gap-1 sm:gap-2 bg-blue-100 text-blue-700 px-2 sm:px-4 py-1 sm:py-2 rounded-md sm:rounded-lg text-xs sm:text-sm font-semibold shadow border border-blue-200">
-                    <div className="flex gap-1">
-                      <div className="w-1 h-2 sm:h-3 bg-blue-500 animate-pulse" />
-                      <div className="w-1 h-2 sm:h-3 bg-blue-500 animate-pulse delay-100" />
-                      <div className="w-1 h-2 sm:h-3 bg-blue-500 animate-pulse delay-200" />
-                    </div>
-                    <span className="hidden sm:inline">AI Speaking</span>
-                    <span className="sm:hidden">AI</span>
-                  </div>
-                )}
+
               </div>
             )}
           </div>

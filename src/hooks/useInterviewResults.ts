@@ -29,6 +29,40 @@ export interface InterviewResult {
   recording_url?: string;
   created_at: string;
   updated_at: string;
+  // Weighted scoring fields
+  raw_domain_score?: number;
+  max_domain_score?: number;
+  normalized_domain_score?: number;
+  question_scores?: {
+    questions: Array<{
+      question: string;
+      answer: string;
+      score: number;
+      scoring_rationale: string;
+      is_domain_question: boolean;
+      is_followup_question: boolean;
+      difficulty?: string;
+      difficulty_multiplier?: number;
+      weighted_score?: number;
+      excluded_from_scoring?: boolean;
+      exclusion_reason?: string;
+      is_abandoned?: boolean;
+      is_greeting?: boolean;
+      replaces_main_question?: boolean;
+    }>;
+    total_questions: number;
+    domain_questions_count: number;
+    scorable_questions_count: number;
+    raw_score: number;
+    max_score: number;
+    normalized_score: number;
+  };
+  communication_analysis?: {
+    clarity: string;
+    articulation: string;
+    confidence: string;
+    language_proficiency: string;
+  };
   // New domain-centric fields
   domain_knowledge_insights?: string;
   technical_competency_analysis?: {

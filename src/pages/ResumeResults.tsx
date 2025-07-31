@@ -99,7 +99,27 @@ export const ResumeResults: React.FC = () => {
       console.log('Interview data:', interviewData);
     } catch (error) {
       console.error('Error generating interview link:', error);
-      toast.error('Failed to generate interview link. Please try again.');
+      
+      // Provide specific error messages based on the error type
+      const errorMessage = error.message || 'Unknown error';
+      
+      if (errorMessage.includes('not found in database or memory')) {
+        toast.error('Candidate not found', {
+          description: 'This candidate may have been deleted or the data was not saved properly. Please refresh the page.'
+        });
+      } else if (errorMessage.includes('The result contains 0 rows')) {
+        toast.error('Candidate data missing', {
+          description: 'The candidate information is not available in the database. Please re-upload the resume.'
+        });
+      } else if (errorMessage.includes('Database error')) {
+        toast.error('Database connection error', {
+          description: 'Please check your connection and try again.'
+        });
+      } else {
+        toast.error('Failed to generate interview link', {
+          description: 'Please try again or contact support if the problem persists.'
+        });
+      }
     } finally {
       setGeneratingLinks(prev => ({ ...prev, [candidate.resume_id]: false }));
     }

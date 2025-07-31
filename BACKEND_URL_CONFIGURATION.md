@@ -94,9 +94,9 @@ URL: https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
 ```
 
 ### Previously Used URLs
-- `https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net` (Previous Azure deployment)
-- `https://backendb2b.azurewebsites.net` (Previous Azure deployment)
-- `https://hire-ai-rg-backend-gafpbjhkdgemdsfp.southindia-01.azurewebsites.net` (Previous Azure deployment)
+- http://localhost:8000 (Previous development backend)
+- https://backendb2b.azurewebsites.net (Previous Azure deployment)
+- https://hire-ai-rg-backend-gafpbjhkdgemdsfp.southindia-01.azurewebsites.net (Previous Azure deployment)
 
 ## 🛠️ Related Configuration Files
 
@@ -146,8 +146,19 @@ grep -r "azurewebsites.net" .
 
 ## 📝 Changelog
 
+### 2025-07-30 - Migration to Azure Production Backend
+- Updated all fallback URLs from http://localhost:8000 to https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
+- Changed configuration from local development backend to Azure production backend
+- Updated 6 core application files and 1 test script
+- Documentation updated to reflect Azure as the current production backend
+
+### 2025-01-XX - Rollback to Localhost for Development
+- Rolled back all fallback URLs from Azure production backend to http://localhost:8000 for local development
+- Updated documentation to reflect localhost as the current backend
+- Azure URL moved to 'Previously Used URLs'
+
 ### 2025-01-XX - Latest Update (MIGRATION TO AZURE)
-- Updated all fallback URLs from `http://localhost:8000` to `https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net`
+- Updated all fallback URLs from http://localhost:8000 to https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
 - Changed configuration from local development backend to Azure production backend
 - Updated 6 core application files and 1 test script
 - Docker health checks intentionally kept as localhost (correct behavior)

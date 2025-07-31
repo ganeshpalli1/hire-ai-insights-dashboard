@@ -119,22 +119,23 @@ export const InterviewResults: React.FC = () => {
                   <ClipboardDocumentCheckIcon className="w-6 h-6" />
                   Scoring & Evaluation
                 </h4>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-6">
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-6 mb-6">
                   <div className={`text-center p-6 bg-gradient-to-br ${getScoreColor(selectedResult.domain_score)} rounded-2xl shadow-lg`}>
                     <div className="text-3xl font-bold">{selectedResult.domain_score}%</div>
-                    <div className="text-sm capitalize font-semibold opacity-90">Domain</div>
+                    <div className="text-sm capitalize font-semibold opacity-90">Domain (80%)</div>
+                    {selectedResult.normalized_domain_score !== undefined && (
+                      <div className="text-xs opacity-75 mt-1">
+                        Raw: {selectedResult.raw_domain_score?.toFixed(1)}/{selectedResult.max_domain_score?.toFixed(1)}
                   </div>
-                  <div className={`text-center p-6 bg-gradient-to-br ${getScoreColor(selectedResult.behavioral_score)} rounded-2xl shadow-lg`}>
-                    <div className="text-3xl font-bold">{selectedResult.behavioral_score}%</div>
-                    <div className="text-sm capitalize font-semibold opacity-90">Behavioral</div>
+                    )}
                   </div>
                   <div className={`text-center p-6 bg-gradient-to-br ${getScoreColor(selectedResult.communication_score)} rounded-2xl shadow-lg`}>
                     <div className="text-3xl font-bold">{selectedResult.communication_score}%</div>
-                    <div className="text-sm capitalize font-semibold opacity-90">Communication</div>
+                    <div className="text-sm capitalize font-semibold opacity-90">Communication (20%)</div>
                   </div>
                   <div className={`text-center p-6 bg-gradient-to-br ${getScoreColor(selectedResult.overall_score)} rounded-2xl shadow-lg`}>
                     <div className="text-3xl font-bold">{selectedResult.overall_score}%</div>
-                    <div className="text-sm capitalize font-semibold opacity-90">Overall</div>
+                    <div className="text-sm capitalize font-semibold opacity-90">Overall Score</div>
                   </div>
                 </div>
                 <div className="p-6 bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-200 rounded-2xl">
@@ -144,6 +145,109 @@ export const InterviewResults: React.FC = () => {
                   </p>
                 </div>
               </div>
+
+              {/* Question-by-Question Scoring */}
+              {selectedResult.question_scores && (
+                <div className="bg-gradient-to-br from-amber-50 to-orange-50 p-8 rounded-2xl border border-amber-200">
+                  <h4 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+                    📊 Detailed Question Scoring
+                  </h4>
+                  <div className="mb-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div className="bg-white/80 p-3 rounded-lg">
+                      <div className="font-semibold text-gray-600">Total Questions</div>
+                      <div className="text-xl font-bold">{selectedResult.question_scores.total_questions}</div>
+                    </div>
+                    <div className="bg-white/80 p-3 rounded-lg">
+                      <div className="font-semibold text-gray-600">Scorable Questions</div>
+                      <div className="text-xl font-bold">{selectedResult.question_scores.scorable_questions_count}</div>
+                    </div>
+                    <div className="bg-white/80 p-3 rounded-lg">
+                      <div className="font-semibold text-gray-600">Raw Score</div>
+                      <div className="text-xl font-bold">{selectedResult.question_scores.raw_score.toFixed(1)}/{selectedResult.question_scores.max_score.toFixed(1)}</div>
+                    </div>
+                    <div className="bg-white/80 p-3 rounded-lg">
+                      <div className="font-semibold text-gray-600">Normalized</div>
+                      <div className="text-xl font-bold">{selectedResult.question_scores.normalized_score.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                  <div className="space-y-3 max-h-96 overflow-y-auto">
+                    {selectedResult.question_scores.questions.map((q, idx) => (
+                      <div key={idx} className={`bg-white/80 p-4 rounded-lg border ${q.excluded_from_scoring ? 'border-gray-300 opacity-60' : 'border-amber-300'}`}>
+                        <div className="flex justify-between items-start mb-2">
+                          <div className="flex-1">
+                            <div className="font-semibold text-gray-800 mb-1">
+                              Q{idx + 1}: {q.question}
+                            </div>
+                            <div className="flex flex-wrap gap-2 text-xs">
+                              {q.is_domain_question && (
+                                <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded">Domain</span>
+                              )}
+                              {q.is_followup_question && (
+                                <span className={`px-2 py-1 rounded ${
+                                  q.replaces_main_question 
+                                    ? 'bg-purple-100 text-purple-700' 
+                                    : 'bg-blue-100 text-blue-700'
+                                }`}>
+                                  {q.replaces_main_question ? 'Follow-up (Final Answer)' : 'Follow-up'}
+                                </span>
+                              )}
+                              {q.difficulty && (
+                                <span className={`px-2 py-1 rounded ${
+                                  q.difficulty === 'hard' ? 'bg-red-100 text-red-700' :
+                                  q.difficulty === 'medium' ? 'bg-yellow-100 text-yellow-700' :
+                                  'bg-green-100 text-green-700'
+                                }`}>
+                                  {q.difficulty.charAt(0).toUpperCase() + q.difficulty.slice(1)} (×{q.difficulty_multiplier})
+                                </span>
+                              )}
+                              {q.excluded_from_scoring && (
+                                <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded" title={q.exclusion_reason}>
+                                  {q.exclusion_reason?.includes('replaced by follow-up') ? 'Replaced by Follow-up' : 'Excluded'}
+                                </span>
+                              )}
+                              {q.is_abandoned && (
+                                <span className="px-2 py-1 bg-gray-200 text-gray-700 rounded">
+                                  Not Asked - Interview Ended
+                                </span>
+                              )}
+                              {q.is_greeting && (
+                                <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded">
+                                  Welcome Message
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="ml-4 text-right">
+                            <div className={`text-2xl font-bold ${getScoreColor(q.score * 20).replace('from-', 'text-').replace('to-', '').split(' ')[0]}`}>
+                              {q.score}/5
+                            </div>
+                            {q.weighted_score !== undefined && !q.excluded_from_scoring && (
+                              <div className="text-sm text-gray-600">
+                                Weighted: {q.weighted_score.toFixed(1)}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {q.answer && (
+                          <details className="mt-2">
+                            <summary className="cursor-pointer text-sm text-gray-600 hover:text-gray-800">
+                              View Answer & Rationale
+                            </summary>
+                            <div className="mt-2 p-3 bg-gray-50 rounded text-sm">
+                              <div className="mb-2">
+                                <strong>Answer:</strong> {q.answer}
+                              </div>
+                              <div>
+                                <strong>Scoring Rationale:</strong> {q.scoring_rationale}
+                              </div>
+                            </div>
+                          </details>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Interview Recording */}
               {selectedResult.recording_url && (
@@ -175,6 +279,33 @@ export const InterviewResults: React.FC = () => {
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
                       </svg>
                     </a>
+                  </div>
+                </div>
+              )}
+
+              {/* Communication Analysis */}
+              {selectedResult.communication_analysis && (
+                <div className="bg-gradient-to-br from-cyan-50 to-sky-50 p-8 rounded-2xl border border-cyan-200">
+                  <h4 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
+                    💬 Communication Analysis
+                  </h4>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <div className="bg-white/80 p-4 rounded-lg">
+                      <div className="text-sm font-semibold text-gray-600 mb-1">Clarity</div>
+                      <div className="text-lg font-bold text-gray-800">{selectedResult.communication_analysis.clarity}</div>
+                    </div>
+                    <div className="bg-white/80 p-4 rounded-lg">
+                      <div className="text-sm font-semibold text-gray-600 mb-1">Articulation</div>
+                      <div className="text-lg font-bold text-gray-800">{selectedResult.communication_analysis.articulation}</div>
+                    </div>
+                    <div className="bg-white/80 p-4 rounded-lg">
+                      <div className="text-sm font-semibold text-gray-600 mb-1">Confidence</div>
+                      <div className="text-lg font-bold text-gray-800">{selectedResult.communication_analysis.confidence}</div>
+                    </div>
+                    <div className="bg-white/80 p-4 rounded-lg">
+                      <div className="text-sm font-semibold text-gray-600 mb-1">Language Proficiency</div>
+                      <div className="text-lg font-bold text-gray-800">{selectedResult.communication_analysis.language_proficiency}</div>
+                    </div>
                   </div>
                 </div>
               )}

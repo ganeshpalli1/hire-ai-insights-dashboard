@@ -34,6 +34,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 import uvicorn
+import httpx
 
 # Supabase integration
 try:
@@ -308,13 +309,29 @@ class HybridStore:
         self.memory_store = InMemoryStore()
         self.supabase_store = SupabaseStore()
     
-    def create_job(self, job_id: str, job_data: Dict[str, Any]):
+    async def create_job(self, job_id: str, job_data: Dict[str, Any]) -> bool:
         """Store job in both memory and Supabase"""
         # Always store in memory for fast access
         self.memory_store.create_job(job_id, job_data)
         
-        # Also store in Supabase (async operation)
-        asyncio.create_task(self.supabase_store.create_job(job_id, job_data))
+        # Wait for Supabase storage to complete successfully
+        try:
+            supabase_success = await self.supabase_store.create_job(job_id, job_data)
+            if not supabase_success:
+                logger.error(f"❌ Failed to store job {job_id} in Supabase, removing from memory")
+                # Remove from memory if Supabase storage failed
+                if job_id in self.memory_store.jobs:
+                    del self.memory_store.jobs[job_id]
+                return False
+            
+            logger.info(f"✅ Job {job_id} successfully stored in both memory and Supabase")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Error storing job {job_id} in Supabase: {str(e)}, removing from memory")
+            # Remove from memory if Supabase storage failed
+            if job_id in self.memory_store.jobs:
+                del self.memory_store.jobs[job_id]
+            return False
     
     def update_job_analysis(self, job_id: str, analysis: Dict[str, Any]):
         """Update job analysis in both stores"""
@@ -497,8 +514,11 @@ class AzureOpenAIClient:
         return len(self.encoding.encode(text))
     
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
-    async def complete(self, messages: List[Dict[str, str]], temperature: float = 0.1) -> str:
+    async def complete(self, messages: List[Dict[str, str]], temperature: float = 0.1, max_tokens: int = None) -> str:
         """Make completion request with retry logic"""
+        if max_tokens is None:
+            max_tokens = Config.MAX_TOKENS_PER_REQUEST
+            
         async with self.rate_limiter:
             try:
                 response = await asyncio.to_thread(
@@ -506,7 +526,7 @@ class AzureOpenAIClient:
                     model=Config.AZURE_OPENAI_DEPLOYMENT,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=Config.MAX_TOKENS_PER_REQUEST
+                    max_tokens=max_tokens if max_tokens else Config.MAX_TOKENS_PER_REQUEST
                 )
                 
                 # Extract content and validate
@@ -564,76 +584,382 @@ class InterviewAnalyzer:
     def __init__(self, openai_client: AzureOpenAIClient):
         self.openai_client = openai_client
 
-    async def analyse(self, transcript: str, candidate_name: str, job_role: str) -> Dict[str, Any]:
-        # Check if transcript is minimal/empty
-        is_minimal = len(transcript.strip()) < 200 or "Interview ended before substantial conversation" in transcript
+    async def _parse_transcript_qa_pairs(self, transcript: str) -> List[Dict[str, str]]:
+        """Extract question-answer pairs from transcript, including unanswered questions"""
+        qa_pairs = []
+        lines = transcript.split('\n')
+        current_question = None
+        current_answer = []
         
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check if it's an AI/interviewer line (question)
+            if line.startswith(('AI:', 'AGENT:', 'INTERVIEWER:')):
+                # Save previous Q&A pair if exists (even if no answer)
+                if current_question:
+                    qa_pairs.append({
+                        "question": current_question,
+                        "answer": ' '.join(current_answer).strip() if current_answer else ""
+                    })
+                # Start new question
+                current_question = line.split(':', 1)[1].strip() if ':' in line else line
+                current_answer = []
+            # Check if it's a user/candidate line (answer)
+            elif line.startswith(('USER:', 'CANDIDATE:', 'YOU:')):
+                answer_text = line.split(':', 1)[1].strip() if ':' in line else line
+                current_answer.append(answer_text)
+            # Continue previous answer if no prefix
+            elif current_answer:
+                current_answer.append(line)
+        
+        # Don't forget the last Q&A pair (even if no answer)
+        if current_question:
+            qa_pairs.append({
+                "question": current_question,
+                "answer": ' '.join(current_answer).strip() if current_answer else ""
+            })
+        
+        return qa_pairs
+    
+    def _is_greeting_question(self, question: str) -> bool:
+        """Check if a question is a greeting/welcome message that shouldn't be counted"""
+        greeting_patterns = [
+            "hello",
+            "welcome",
+            "i'm excited to learn",
+            "are you ready to begin",
+            "ready to start",
+            "shall we begin",
+            "let's get started",
+            "nice to meet you",
+            "good morning",
+            "good afternoon",
+            "good evening",
+            "how are you today",
+            "thank you for joining"
+        ]
+        question_lower = question.lower()
+        return any(pattern in question_lower for pattern in greeting_patterns)
+    
+    def _is_followup_question(self, question: str) -> bool:
+        """Check if a question is a follow-up question that shouldn't be scored"""
+        followup_patterns = [
+            "can you elaborate",
+            "could you elaborate",
+            "please elaborate",
+            "tell me more",
+            "can you explain more",
+            "give an example",
+            "provide an example",
+            "can you give me an example",
+            "could you provide more details",
+            "can you be more specific",
+            "anything else",
+            "what else",
+            "continue",
+            "go on",
+            "please continue"
+        ]
+        question_lower = question.lower()
+        return any(pattern in question_lower for pattern in followup_patterns)
+    
+    def _is_skipped_answer(self, answer: str) -> bool:
+        """Check if an answer indicates the candidate skipped or couldn't answer"""
+        if not answer or len(answer.strip()) == 0:
+            return True
+            
+        skip_patterns = [
+            "i don't know",
+            "i dont know",
+            "not sure",
+            "can't answer",
+            "cannot answer",
+            "skip",
+            "pass",
+            "no idea",
+            "i'm not familiar",
+            "im not familiar",
+            "i haven't",
+            "i havent",
+            "unable to answer"
+        ]
+        answer_lower = answer.lower().strip()
+        return any(pattern in answer_lower for pattern in skip_patterns)
+    
+    def _get_difficulty_multiplier(self, difficulty: str) -> float:
+        """Get the multiplier based on question difficulty"""
+        multipliers = {
+            "easy": 1.0,
+            "medium": 1.2,
+            "hard": 1.5,
+            "very_hard": 1.5  # Treating very_hard same as hard
+        }
+        return multipliers.get(difficulty.lower(), 1.0)
+
+    async def analyse(self, transcript: str, candidate_name: str, job_role: str, interview_questions: List[Dict] = None) -> Dict[str, Any]:
+        # Extract Q&A pairs from transcript
+        qa_pairs = await self._parse_transcript_qa_pairs(transcript)
+        
+        # New weighted scoring system prompt
         system_prompt = (
             "You are an AI talent-acquisition assistant analyzing a job interview. "
-            "Focus on domain-specific knowledge, technical competency, and role-relevant insights. "
-            "Return ONLY valid JSON matching this schema EXACTLY. ALL fields are REQUIRED and must have meaningful content:\n"
+            "Score each question-answer pair individually focusing on domain/technical knowledge.\n\n"
+            "SCORING CRITERIA:\n"
+            "0 = No answer/Skipped/Unable to answer/Empty response\n"
+            "1 = Incorrect or irrelevant\n"
+            "2 = Vague or incomplete\n"
+            "3 = Partially correct or shallow\n"
+            "4 = Mostly correct, some minor gaps\n"
+            "5 = Complete, accurate, in-depth, contextual\n\n"
+            "SPECIAL HANDLING:\n"
+            "- If the candidate didn't answer, skipped, or said they don't know: score = 0\n"
+            "- Empty or missing answers: score = 0\n"
+            "- 'I don't know' or equivalent responses: score = 0\n\n"
+            "IMPORTANT: Return ONLY raw JSON without any markdown formatting or code fences.\n"
+            "Do NOT wrap the response in ```json``` or any other formatting.\n"
+            "Return ONLY valid JSON matching this schema EXACTLY:\n"
             "{\n"
-            "  \"domain_score\": int (0-100),\n"
-            "  \"behavioral_score\": int (0-100),\n"
+            "  \"question_scores\": {\n"
+            "    \"questions\": [\n"
+            "      {\n"
+            "        \"question\": \"The question text\",\n"
+            "        \"answer\": \"The candidate's answer\",\n"
+            "        \"score\": 0-5,\n"
+            "        \"scoring_rationale\": \"Explanation of why this score was given\",\n"
+            "        \"is_domain_question\": boolean,\n"
+            "        \"is_followup_question\": boolean\n"
+            "      }\n"
+            "    ],\n"
+            "    \"total_questions\": int,\n"
+            "    \"domain_questions_count\": int,\n"
+            "    \"scorable_questions_count\": int\n"
+            "  },\n"
             "  \"communication_score\": int (0-100),\n"
-            "  \"overall_score\": int (0-100),\n"
-            "  \"domain_knowledge_insights\": \"A detailed paragraph analyzing the candidate's understanding of domain concepts, industry knowledge, and technical depth relevant to the role\",\n"
+            "  \"communication_analysis\": {\n"
+            "    \"clarity\": \"Excellent|Good|Average|Poor\",\n"
+            "    \"articulation\": \"Very Clear|Clear|Somewhat Clear|Unclear\",\n"
+            "    \"confidence\": \"High|Medium|Low\",\n"
+            "    \"language_proficiency\": \"Native|Fluent|Proficient|Basic\"\n"
+            "  },\n"
+            "  \"domain_knowledge_insights\": \"Detailed analysis of technical/domain understanding\",\n"
             "  \"technical_competency_analysis\": {\n"
-            "    \"strengths\": [\"List of specific technical strengths demonstrated\"],\n"
-            "    \"weaknesses\": [\"List of technical areas needing improvement\"],\n"
+            "    \"strengths\": [\"List of strengths\"],\n"
+            "    \"weaknesses\": [\"List of weaknesses\"],\n"
             "    \"depth_rating\": \"Expert|Advanced|Intermediate|Beginner\"\n"
             "  },\n"
-            "  \"problem_solving_approach\": \"A detailed assessment of how the candidate approaches problems, their methodology, and analytical thinking demonstrated in responses\",\n"
-            "  \"relevant_experience_assessment\": \"Analysis of how well their past experience aligns with role requirements and how they articulated their experience\",\n"
-            "  \"knowledge_gaps\": [\"Specific areas where knowledge is lacking\"],\n"
+            "  \"problem_solving_approach\": \"Assessment of problem-solving methodology\",\n"
+            "  \"relevant_experience_assessment\": \"Analysis of experience alignment\",\n"
+            "  \"knowledge_gaps\": [\"Areas needing improvement\"],\n"
             "  \"interview_performance_metrics\": {\n"
             "    \"response_quality\": \"Excellent|Good|Average|Poor\",\n"
             "    \"technical_accuracy\": \"Highly Accurate|Mostly Accurate|Partially Accurate|Inaccurate\",\n"
             "    \"examples_provided\": \"Rich Examples|Some Examples|Few Examples|No Examples\",\n"
             "    \"clarity_of_explanation\": \"Very Clear|Clear|Somewhat Clear|Unclear\"\n"
             "  },\n"
-            "  \"confidence_level\": \"high|medium|low\",\n"
-            "  \"cheating_detected\": boolean,\n"
-            "  \"body_language\": \"positive|neutral|negative\",\n"
-            "  \"speech_pattern\": \"confident|normal|hesitant|nervous\",\n"
-            "  \"areas_of_improvement\": [\"List of specific areas for improvement\"],\n"
+            "  \"areas_of_improvement\": [\"Specific improvement areas\"],\n"
             "  \"system_recommendation\": \"Strong Hire|Hire|Maybe|No Hire\"\n"
             "}\n\n"
-            "IMPORTANT: Every field must contain substantive, meaningful analysis based on the transcript. "
-            "If the interview was terminated early or has minimal content, provide analysis noting the incomplete nature of the assessment."
+            "SCORING RULES:\n"
+            "1. Score each Q&A pair from 0-5 based on the criteria\n"
+            "2. Give score=0 for: empty answers, 'I don't know', skipped questions, or no response\n"
+            "3. Exclude greeting/welcome messages (Hello, Welcome, Are you ready to begin, etc.) from scoring\n"
+            "4. Mark questions as domain questions if they test technical/job-specific knowledge\n"
+            "5. Mark follow-up questions (elaborate, give example, etc.) as is_followup_question=true\n"
+            "6. For follow-up questions: Score the follow-up as it represents the final answer to the main question\n"
+            "7. Score ALL actual interview questions including follow-ups\n"
+            "8. Focus evaluation on technical competency and domain expertise\n"
+            "9. Respond ONLY with valid JSON, no additional text or formatting."
         )
         
-        if is_minimal:
-            # Special prompt for minimal/incomplete interviews
+        # Format Q&A pairs for scoring
+        qa_text = ""
+        for i, qa in enumerate(qa_pairs, 1):
+            qa_text += f"\nQ{i}: {qa['question']}\nA{i}: {qa['answer']}\n"
+        
             user_prompt = (
                 f"Candidate: {candidate_name}\nRole interviewed for: {job_role}\n\n"
-                f"IMPORTANT: This interview was terminated early or has minimal content. "
-                f"Provide a professional assessment acknowledging the limited interaction while still filling all required fields.\n\n"
-                f"For each field, note that the assessment is based on incomplete data. "
-                f"Recommend a follow-up interview for comprehensive evaluation.\n\n"
-                f"Transcript:\n{transcript}"
-            )
-        else:
-            user_prompt = (
-                f"Candidate: {candidate_name}\nRole interviewed for: {job_role}\n\n"
-                f"Analyze the following interview transcript and provide comprehensive insights for EVERY field:\n\n"
-                f"1. Domain Knowledge Insights - Analyze their understanding of concepts specific to {job_role}\n"
-                f"2. Technical Competency - Identify specific technical strengths and weaknesses\n"
-                f"3. Problem-Solving Approach - How do they tackle problems and challenges?\n"
-                f"4. Relevant Experience - How does their background align with this role?\n"
-                f"5. Knowledge Gaps - What specific areas need development?\n"
-                f"6. Performance Metrics - Quality of responses and communication\n\n"
-                f"Base your analysis on the actual content of their responses in the transcript below:\n\n"
-                f"Transcript:\n{transcript}"
+            f"Score each question-answer pair below using the 0-5 criteria.\n"
+            f"IMPORTANT: \n"
+            f"- Give score=0 for empty answers, 'I don't know', or skipped questions\n"
+            f"- DO NOT score greeting/welcome messages (Hello, Welcome, Are you ready to begin, etc.)\n"
+            f"- For follow-up questions: Score the follow-up answer as the final answer to the main question\n"
+            f"- Only score actual interview questions that test knowledge or skills\n"
+            f"Identify which questions test domain/technical knowledge (is_domain_question=true).\n"
+            f"Mark follow-up questions (elaborate, example, tell more) as is_followup_question=true.\n"
+            f"Score ALL actual interview questions including follow-ups.\n"
+            f"Analyze communication skills separately based on overall language use, clarity, and confidence.\n\n"
+            f"QUESTION-ANSWER PAIRS ({len(qa_pairs)} total):\n"
+            f"{qa_text}\n\n"
+            f"ADDITIONAL CONTEXT - Full Transcript:\n{transcript}"
             )
 
         content = await self.openai_client.complete([
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
-        ], temperature=0.1)
+        ], temperature=0.1, max_tokens=16000)  # Max tokens for gpt-4o is 16384
 
         try:
-            analysis = json.loads(content)
+            logger.info(f"📊 Azure OpenAI response length: {len(content)} characters")
+            
+            # Clean the response - remove any markdown formatting (matching job analysis pattern)
+            cleaned_content = content.strip()
+            if cleaned_content.startswith('```json'):
+                cleaned_content = cleaned_content[7:]  # Remove ```json
+            elif cleaned_content.startswith('```'):
+                cleaned_content = cleaned_content[3:]  # Remove ```
+            if cleaned_content.endswith('```'):
+                cleaned_content = cleaned_content[:-3]  # Remove ```
+            cleaned_content = cleaned_content.strip()
+            
+            logger.info(f"Cleaned response preview: {cleaned_content[:200]}...")
+            
+            analysis = json.loads(cleaned_content)
+            
+            # Calculate weighted scores based on difficulty
+            if "question_scores" in analysis and interview_questions:
+                questions_data = analysis["question_scores"]["questions"]
+                
+                # Map interview questions by their text for difficulty lookup
+                question_difficulty_map = {}
+                for iq in interview_questions:
+                    if "question" in iq and "difficulty" in iq:
+                        question_difficulty_map[iq["question"].lower()] = iq.get("difficulty", "medium")
+                
+                # Calculate raw score and max score
+                raw_score = 0
+                max_score = 0
+                domain_raw_score = 0
+                domain_max_score = 0
+                last_main_question_index = -1
+                followup_counted_for_main = set()  # Track which main questions already have a follow-up scored
+                
+                for i, q in enumerate(questions_data):
+                    # Check if it's a greeting/welcome message
+                    is_greeting = self._is_greeting_question(q["question"])
+                    q["is_greeting"] = is_greeting
+                    
+                    # Check if it's a follow-up question
+                    is_followup = self._is_followup_question(q["question"])
+                    q["is_followup_question"] = is_followup
+                    
+                    # Exclude greetings from scoring
+                    if is_greeting:
+                        q["excluded_from_scoring"] = True
+                        q["exclusion_reason"] = "Greeting/welcome message, not an interview question"
+                        continue
+                    
+                    # Track main questions
+                    if not is_followup:
+                        last_main_question_index = i
+                    
+                    # For follow-ups, replace the main question's score and exclude the main question
+                    if is_followup and last_main_question_index >= 0:
+                        if last_main_question_index in followup_counted_for_main:
+                            q["excluded_from_scoring"] = True
+                            q["exclusion_reason"] = "Already scored one follow-up for this main question"
+                            continue
+                        else:
+                            # Mark the main question as excluded since follow-up will replace it
+                            main_question = questions_data[last_main_question_index]
+                            main_question["excluded_from_scoring"] = True
+                            main_question["exclusion_reason"] = "Score replaced by follow-up question"
+                            
+                            followup_counted_for_main.add(last_main_question_index)
+                            q["excluded_from_scoring"] = False
+                            q["replaces_main_question"] = True
+                    
+                    # Get difficulty from the original question
+                    question_lower = q["question"].lower()
+                    difficulty = "medium"  # Default
+                    
+                    # Try to match with original questions
+                    for orig_q, diff in question_difficulty_map.items():
+                        if orig_q in question_lower or question_lower in orig_q:
+                            difficulty = diff
+                            break
+                    
+                    # For follow-up questions, use the same difficulty as the main question
+                    if is_followup and last_main_question_index >= 0:
+                        main_q = questions_data[last_main_question_index]
+                        if "difficulty" in main_q:
+                            difficulty = main_q["difficulty"]
+                    
+                    multiplier = self._get_difficulty_multiplier(difficulty)
+                    q["difficulty"] = difficulty
+                    q["difficulty_multiplier"] = multiplier
+                    
+                    # Calculate weighted score
+                    score = q.get("score", 0)
+                    weighted_score = score * multiplier
+                    q["weighted_score"] = weighted_score
+                    
+                    # Add to totals
+                    raw_score += weighted_score
+                    max_score += 5 * multiplier  # Max score is 5 * multiplier
+                    
+                    # If it's a domain question, add to domain totals
+                    if q.get("is_domain_question", False):
+                        domain_raw_score += weighted_score
+                        domain_max_score += 5 * multiplier
+                
+                # Calculate scorable questions before handling abandoned interviews
+                scorable_questions = [q for q in questions_data if not q.get("excluded_from_scoring", False)]
+                
+                # Handle abandoned interviews - add remaining questions to max score
+                total_expected_questions = 7
+                questions_asked = len(scorable_questions)
+                
+                if questions_asked < total_expected_questions:
+                    # Add remaining questions with medium difficulty (1.2x) to max score
+                    remaining_questions = total_expected_questions - questions_asked
+                    medium_multiplier = 1.2
+                    max_score += remaining_questions * 5 * medium_multiplier
+                    
+                    # Add abandoned questions to the questions list for transparency
+                    for i in range(remaining_questions):
+                        abandoned_question = {
+                            "question": f"[Question {questions_asked + i + 1} - Not Asked Due to Interview Ending]",
+                            "answer": "[Interview Ended]",
+                            "score": 0,
+                            "scoring_rationale": "Interview ended before this question could be asked",
+                            "is_domain_question": True,  # Assume domain questions for max score calculation
+                            "is_followup_question": False,
+                            "difficulty": "medium",
+                            "difficulty_multiplier": medium_multiplier,
+                            "weighted_score": 0,
+                            "is_abandoned": True
+                        }
+                        questions_data.append(abandoned_question)
+                        domain_max_score += 5 * medium_multiplier
+                
+                # Calculate normalized scores
+                normalized_score = (raw_score / max_score * 100) if max_score > 0 else 0
+                normalized_domain_score = (domain_raw_score / domain_max_score * 100) if domain_max_score > 0 else 0
+                
+                # Store calculated values
+                analysis["raw_domain_score"] = round(domain_raw_score, 2)
+                analysis["max_domain_score"] = round(domain_max_score, 2)
+                analysis["normalized_domain_score"] = round(normalized_domain_score, 2)
+                
+                # Overall score = 80% from normalized domain score + 20% from communication
+                communication_score = analysis.get("communication_score", 50)
+                analysis["overall_score"] = int(normalized_domain_score * 0.8 + communication_score * 0.2)
+                analysis["domain_score"] = int(normalized_domain_score)
+                
+                # Add summary to question_scores
+                # scorable_questions already calculated above
+                domain_questions = [q for q in scorable_questions if q.get("is_domain_question", False)]
+                
+                analysis["question_scores"]["scorable_questions_count"] = len(scorable_questions)
+                analysis["question_scores"]["raw_score"] = round(raw_score, 2)
+                analysis["question_scores"]["max_score"] = round(max_score, 2)
+                analysis["question_scores"]["normalized_score"] = round(normalized_score, 2)
+                
+                # Remove behavioral_score from the analysis if it exists
+                analysis.pop("behavioral_score", None)
             
             # Ensure all required fields have meaningful content
             if not analysis.get("domain_knowledge_insights") or len(analysis.get("domain_knowledge_insights", "")) < 50:
@@ -678,110 +1004,28 @@ class InterviewAnalyzer:
                     "clarity_of_explanation": "Clear"
                 }
             
-            # Ensure backward compatibility by keeping behavioral analysis separate
-            behavioral_analysis = {
-                "confidence_level": analysis.get("confidence_level", "medium"),
-                "cheating_detected": analysis.get("cheating_detected", False),
-                "body_language": analysis.get("body_language", "neutral"),
-                "speech_pattern": analysis.get("speech_pattern", "normal")
-            }
-            
-            # Remove behavioral fields from main analysis
-            for field in ["confidence_level", "cheating_detected", "body_language", "speech_pattern"]:
+            # Remove any behavioral-related fields that might have been included
+            fields_to_remove = ["behavioral_score", "confidence_level", "cheating_detected", "body_language", "speech_pattern"]
+            for field in fields_to_remove:
                 analysis.pop(field, None)
             
-            # Add behavioral analysis as a separate field
-            analysis["behavioral_analysis"] = behavioral_analysis
-            
             return analysis
-        except Exception as e:
-            logger.error("Failed to parse GPT analysis JSON. Raw:\n%s", content)
-            logger.error(f"Error: {str(e)}")
+        except json.JSONDecodeError as e:
+            logger.error("Failed to parse GPT analysis JSON. Error: %s", str(e))
+            logger.error("Response length: %d characters", len(content) if content else 0)
+            logger.error("First 100 characters: %s", content[:100] if content else "EMPTY RESPONSE")
+            logger.error("Last 200 characters: %s", content[-200:] if content else "EMPTY RESPONSE")
             
-            # Return a complete fallback analysis
-            is_minimal = len(transcript.strip()) < 200 or "Interview ended before substantial conversation" in transcript
-            
-            if is_minimal:
-                # Fallback for incomplete interviews
-                return {
-                    "domain_score": 0,
-                    "behavioral_score": 0,
-                    "communication_score": 0,
-                    "overall_score": 0,
-                    "domain_knowledge_insights": (
-                        f"Interview was terminated early, preventing assessment of {job_role} domain knowledge. "
-                        "The limited interaction does not provide sufficient data for meaningful technical evaluation. "
-                        "A complete interview session is recommended for proper assessment."
-                    ),
-                    "technical_competency_analysis": {
-                        "strengths": ["Unable to assess due to incomplete interview"],
-                        "weaknesses": ["Incomplete interview prevents assessment"],
-                        "depth_rating": "Unable to determine"
-                    },
-                    "problem_solving_approach": (
-                        "Interview ended before problem-solving abilities could be evaluated. "
-                        "No substantive responses were provided to assess analytical thinking."
-                    ),
-                    "relevant_experience_assessment": (
-                        "The abbreviated interview did not allow for discussion of relevant experience. "
-                        "Unable to determine alignment with role requirements."
-                    ),
-                    "knowledge_gaps": ["Complete interview needed for assessment"],
-                    "interview_performance_metrics": {
-                        "response_quality": "Incomplete",
-                        "technical_accuracy": "Not Assessed",
-                        "examples_provided": "No Examples",
-                        "clarity_of_explanation": "Not Assessed"
-                    },
-                    "areas_of_improvement": ["Complete full interview for proper evaluation"],
-                    "system_recommendation": "Incomplete - Reschedule Interview",
-                    "behavioral_analysis": {
-                        "confidence_level": "not assessed",
-                        "cheating_detected": False,
-                        "body_language": "not assessed",
-                        "speech_pattern": "not assessed"
-                    }
-                }
+            # Check for common issues
+            if not content:
+                raise Exception("Interview analysis failed: Azure OpenAI returned empty response")
+            elif content.strip().startswith("I") or content.strip().startswith("The"):
+                raise Exception("Interview analysis failed: Azure OpenAI returned conversational text instead of JSON")
             else:
-                # Normal fallback for complete interviews
-                return {
-                    "domain_score": 70,
-                    "behavioral_score": 75,
-                    "communication_score": 80,
-                    "overall_score": 75,
-                    "domain_knowledge_insights": (
-                        f"The candidate showed foundational understanding of {job_role} concepts during the interview. "
-                        "While they demonstrated basic knowledge, there's opportunity for deeper technical expertise development."
-                    ),
-                    "technical_competency_analysis": {
-                        "strengths": ["Good communication", "Basic technical knowledge", "Eager to learn"],
-                        "weaknesses": ["Limited practical experience", "Needs more depth in core technologies"],
-                        "depth_rating": "Intermediate"
-                    },
-                    "problem_solving_approach": (
-                        "The candidate approaches problems methodically, showing logical thinking patterns. "
-                        "They would benefit from more exposure to complex real-world scenarios."
-                    ),
-                    "relevant_experience_assessment": (
-                        f"The candidate's background provides some relevant experience for the {job_role} position. "
-                        "Additional hands-on experience in key areas would strengthen their profile."
-                    ),
-                    "knowledge_gaps": ["Advanced technical concepts", "Industry best practices", "Specialized tools"],
-                    "interview_performance_metrics": {
-                        "response_quality": "Good",
-                        "technical_accuracy": "Mostly Accurate",
-                        "examples_provided": "Some Examples",
-                        "clarity_of_explanation": "Clear"
-                    },
-                    "areas_of_improvement": ["Technical depth", "Practical experience", "Domain expertise"],
-                    "system_recommendation": "Maybe",
-                    "behavioral_analysis": {
-                        "confidence_level": "medium",
-                        "cheating_detected": False,
-                        "body_language": "neutral",
-                        "speech_pattern": "normal"
-                    }
-                }
+                raise Exception(f"Interview analysis failed: Unable to parse Azure OpenAI JSON response. {str(e)}")
+        except Exception as e:
+            logger.error("Unexpected error during interview analysis: %s", str(e))
+            raise Exception(f"Interview analysis failed: {str(e)}")
 
 # Candidate Name Extractor
 class CandidateNameExtractor:
@@ -1057,10 +1301,229 @@ class JobAnalyzer:
 
 # Interview Question Generator
 class InterviewQuestionGenerator:
-    """Generate personalized interview questions using LLM"""
+    """Generate standardized interview questions based on job requirements using LLM"""
     
     def __init__(self, openai_client: AzureOpenAIClient):
         self.openai_client = openai_client
+        self.adaptive_enabled = True  # Feature flag for adaptive interviews
+    
+    @staticmethod
+    def determine_difficulty_level(resume_score: int) -> str:
+        """
+        Determine interview question difficulty level based on resume score
+        
+        Args:
+            resume_score: Resume fit score (0-100)
+            
+        Returns:
+            str: Difficulty level ('easy', 'medium', 'very_hard')
+        """
+        if resume_score <= 60:
+            return 'easy'
+        elif resume_score <= 70:
+            return 'medium'
+        else:
+            return 'very_hard'
+    
+    @staticmethod
+    def get_difficulty_description(difficulty_level: str) -> str:
+        """Get human-readable description of difficulty level"""
+        descriptions = {
+            'easy': 'Basic level questions suitable for entry-level or candidates with lower fit scores',
+            'medium': 'Intermediate level questions for moderately qualified candidates',
+            'very_hard': 'Advanced level questions for highly qualified candidates'
+        }
+        return descriptions.get(difficulty_level, 'Standard level questions')
+    
+    async def generate_adaptive_question_pool(
+        self,
+        job_analysis: Dict[str, Any],
+        evaluation_criteria: Dict[str, int],
+        candidate_type: str,
+        candidate_level: str,
+        initial_difficulty: str
+    ) -> Dict[str, Any]:
+        """Generate a pool of questions at all difficulty levels for adaptive interviewing"""
+        
+        logger.info(f"🔄 Generating adaptive question pool with initial difficulty: {initial_difficulty}")
+        
+        # Calculate question distribution across categories
+        question_distribution = self._distribute_questions(evaluation_criteria)
+        total_base_questions = evaluation_criteria.get("number_of_questions", 7)
+        
+        # Initialize the question pool structure
+        question_pool = {
+            "screening": {"easy": [], "medium": [], "hard": []},
+            "domain": {"easy": [], "medium": [], "hard": []},
+            "behavioral": {"easy": [], "medium": [], "hard": []},
+            "communication": {"easy": [], "medium": [], "hard": []}
+        }
+        
+        # Generate questions for each category at each difficulty level
+        all_generated_questions = {}
+        
+        for category, question_count in question_distribution.items():
+            if question_count > 0:
+                logger.info(f"📝 Generating {question_count} questions for {category} at all difficulty levels")
+                
+                for difficulty in ["easy", "medium", "hard"]:
+                    # Generate questions for this specific category and difficulty
+                    questions = await self._generate_questions_for_difficulty(
+                        job_analysis=job_analysis,
+                        category=category,
+                        difficulty=difficulty,
+                        count=question_count,
+                        candidate_type=candidate_type,
+                        candidate_level=candidate_level,
+                        evaluation_criteria=evaluation_criteria
+                    )
+                    
+                    question_pool[category][difficulty] = questions
+                    all_generated_questions[f"{category}_{difficulty}"] = questions
+        
+        # Create adaptive configuration
+        adaptive_config = {
+            "initial_difficulty": initial_difficulty,
+            "questions_per_category": question_distribution,
+            "total_questions": total_base_questions,
+            "adaptation_rules": {
+                "struggle_indicators": [
+                    "I don't know", "I'm not sure", "not familiar",
+                    "can't remember", "unclear", "confused"
+                ],
+                "excellence_indicators": [
+                    "furthermore", "additionally", "for example",
+                    "specifically", "in my experience", "best practice",
+                    "multiple approaches", "trade-offs"
+                ],
+                "downgrade_threshold": "Clear confusion or inability to answer",
+                "upgrade_threshold": "Comprehensive answer with examples and depth"
+            }
+        }
+        
+        # Create the interview flow configuration
+        interview_flow = {
+            "total_questions": total_base_questions,
+            "difficulty_progression": [],  # Will be filled during interview
+            "categories_order": self._determine_category_order(question_distribution),
+            "current_index": 0
+        }
+        
+        logger.info(f"✅ Generated adaptive question pool: {sum(question_distribution.values())} base questions × 3 difficulty levels")
+        
+        return {
+            "question_pool": question_pool,
+            "adaptive_config": adaptive_config,
+            "interview_flow": interview_flow,
+            "success_criteria": f"Adaptive assessment across {', '.join([k for k,v in question_distribution.items() if v > 0])}",
+            "estimated_duration": total_base_questions * 2  # 2 minutes per question
+        }
+    
+    async def _generate_questions_for_difficulty(
+        self,
+        job_analysis: Dict[str, Any],
+        category: str,
+        difficulty: str,
+        count: int,
+        candidate_type: str,
+        candidate_level: str,
+        evaluation_criteria: Dict[str, int]
+    ) -> List[Dict[str, Any]]:
+        """Generate questions for a specific category and difficulty level"""
+        
+        difficulty_prompts = {
+            "easy": "Basic, foundational questions suitable for entry-level understanding",
+            "medium": "Intermediate questions requiring practical experience and application",
+            "hard": "Advanced questions demanding deep expertise and strategic thinking"
+        }
+        
+        prompt = f"""
+        Generate exactly {count} {difficulty.upper()} difficulty {category} interview questions for a {candidate_type} {candidate_level} position.
+
+        JOB REQUIREMENTS:
+        {json.dumps(job_analysis, indent=2)}
+
+        DIFFICULTY GUIDANCE ({difficulty}):
+        {difficulty_prompts[difficulty]}
+
+        CATEGORY: {category}
+        - Screening: Verify basic qualifications and experience
+        - Domain: Test technical/professional knowledge specific to the role
+        - Behavioral: Assess soft skills, attitude, and cultural fit
+        - Communication: Evaluate ability to explain and present ideas
+
+        Generate questions that:
+        1. Are specifically tailored to {difficulty} difficulty level
+        2. Test {category} competencies
+        3. Are relevant to the job requirements
+        4. Progress logically if asked in sequence
+
+        Respond with valid JSON array:
+        [
+            {{
+                "id": "{category[0]}_{difficulty[0]}_1",
+                "question": "Your question here",
+                "focus_area": "Specific skill/competency being tested",
+                "expected_depth": "{difficulty}",
+                "evaluation_criteria": "What a good answer should include"
+            }}
+        ]
+        """
+        
+        try:
+            messages = [
+                {"role": "system", "content": "You are an expert interview question designer."},
+                {"role": "user", "content": prompt}
+            ]
+            
+            response = await self.openai_client.complete(messages, temperature=0.7)
+            
+            # Debug: log the response to understand format
+            logger.debug(f"OpenAI response for {difficulty} {category}: {response[:200]}...")
+            
+            # Try to extract JSON from response (it might be wrapped in text)
+            try:
+                # First try direct JSON parsing
+                questions = json.loads(response)
+            except json.JSONDecodeError:
+                # Try to find JSON in the response text
+                import re
+                json_match = re.search(r'\[.*\]', response, re.DOTALL)
+                if json_match:
+                    questions = json.loads(json_match.group())
+                else:
+                    raise ValueError("No valid JSON found in response")
+            
+            # Add unique IDs and metadata
+            for i, q in enumerate(questions):
+                q["id"] = f"{category[0]}_{difficulty[0]}_{i+1}"
+                q["category"] = category
+                q["difficulty"] = difficulty
+            
+            return questions
+            
+        except Exception as e:
+            logger.error(f"Error generating {difficulty} {category} questions: {str(e)}")
+            # Return fallback questions
+            return self._get_fallback_questions_for_category(category, difficulty, count)
+    
+    def _determine_category_order(self, distribution: Dict[str, int]) -> List[str]:
+        """Determine the order of categories for the interview"""
+        # Start with screening, then domain, behavioral, and communication
+        order = []
+        priority = ["screening", "domain", "behavioral", "communication"]
+        
+        for cat in priority:
+            if distribution.get(cat, 0) > 0:
+                order.append(cat)
+        
+        return order
+    
+    def _get_fallback_questions_for_category(self, category: str, difficulty: str, count: int) -> List[Dict[str, Any]]:
+        """Get fallback questions if generation fails"""
+        # Use the existing fallback questions and filter by category/difficulty
+        all_fallbacks = self._generate_fallback_questions("", "", {category: count}, count, difficulty)
+        return all_fallbacks.get("questions", [])
     
     def _distribute_questions(self, evaluation_criteria: Dict[str, int], total_questions: int = 7) -> Dict[str, int]:
         """Distribute questions based on percentage weights - strictly following percentages"""
@@ -1167,15 +1630,15 @@ class InterviewQuestionGenerator:
         
         return result
     
-    async def generate_personalized_questions(
+    async def generate_standardized_questions(
         self, 
         job_analysis: Dict[str, Any], 
-        resume_analysis: Dict[str, Any], 
         evaluation_criteria: Dict[str, int],
         candidate_type: str,
-        candidate_level: str
+        candidate_level: str,
+        difficulty_level: str = 'medium'
     ) -> Dict[str, Any]:
-        """Generate personalized interview questions based on configurable criteria"""
+        """Generate standardized interview questions based on job requirements only with specified difficulty level"""
         
         # Get the number of questions from evaluation criteria, default to 7
         total_questions = evaluation_criteria.get('number_of_questions', 7)
@@ -1188,7 +1651,7 @@ class InterviewQuestionGenerator:
         
         # Build requirements dynamically based on actual question distribution
         requirements = []
-        requirements.append(f"Generate exactly {total_questions} personalized interview questions total")
+        requirements.append(f"Generate exactly {total_questions} standardized interview questions total")
         
         requirement_num = 1
         if question_distribution['screening'] > 0:
@@ -1236,14 +1699,21 @@ class InterviewQuestionGenerator:
         
         IMPORTANT: Integrate the above custom instructions into your question generation. This template should guide the style, focus areas, and specific topics to cover for this role and level combination."""
         
+        difficulty_desc = self.get_difficulty_description(difficulty_level)
+        
         prompt = f"""
-        Generate exactly {total_questions} personalized interview questions for a {candidate_type} {candidate_level} candidate based on the following information:
+        Generate exactly {total_questions} standardized interview questions for a {candidate_type} {candidate_level} position based on the job requirements:
 
-        JOB ANALYSIS:
+        JOB ANALYSIS AND REQUIREMENTS:
         {json.dumps(job_analysis, indent=2)}
 
-        CANDIDATE RESUME ANALYSIS:
-        {json.dumps(resume_analysis, indent=2)}
+        DIFFICULTY LEVEL: {difficulty_level.upper()}
+        {difficulty_desc}
+
+        DIFFICULTY-SPECIFIC REQUIREMENTS:
+        - For EASY level: Focus on foundational concepts, basic scenarios, and straightforward questions that test core understanding
+        - For MEDIUM level: Include moderate complexity, some problem-solving scenarios, and practical applications
+        - For VERY_HARD level: Design challenging scenarios, complex problem-solving, advanced technical depth, and strategic thinking
 
         EVALUATION CRITERIA (STRICT - DO NOT GENERATE QUESTIONS FOR 0% CATEGORIES):
         {criteria_text}{template_section}
@@ -1251,7 +1721,14 @@ class InterviewQuestionGenerator:
         REQUIREMENTS:
         {requirements_text}
 
-        IMPORTANT: If any category has 0 questions allocated, DO NOT generate any questions for that category. Only generate questions for categories with allocation > 0.
+        IMPORTANT: 
+        - Adjust question complexity according to the {difficulty_level.upper()} difficulty level specified above
+        - Questions should be based ONLY on the job requirements and role expectations
+        - Do NOT reference any specific candidate background or resume
+        - Generate standardized questions that assess whether ANY candidate meets the job requirements at the specified difficulty level
+        - Questions should be fair and consistent for all candidates applying for this role with similar qualification levels
+        - If any category has 0 questions allocated, DO NOT generate any questions for that category
+        - Ensure all questions align with the {difficulty_level} difficulty while remaining relevant to job requirements
 
         Respond with valid JSON in this exact format:
         {{
@@ -1259,20 +1736,20 @@ class InterviewQuestionGenerator:
                 {{
                     "id": 1,
                     "category": "screening|domain|behavioral|communication",
-                    "question": "Your personalized question here?",
+                    "question": "Your role-based question here?",
                     "focus_area": "specific skill or area being evaluated",
                     "expected_depth": "entry|mid|senior level expected response depth"
                 }}
             ],
             "interview_focus": "Overall focus areas for this interview",
-            "success_criteria": "What makes a good response for this candidate profile",
+            "success_criteria": "What makes a good response for this role and level",
             "total_questions": {total_questions},
             "estimated_duration": {evaluation_criteria.get('estimated_duration', 10)}
         }}
         """
         
         messages = [
-            {"role": "system", "content": f"You are an expert interview designer with deep understanding of technical and behavioral assessment. You must respond with valid JSON only containing exactly {total_questions} questions distributed according to the specified criteria."},
+            {"role": "system", "content": f"You are an expert interview designer with deep understanding of technical and behavioral assessment. Create standardized, role-based questions that evaluate job requirements fairly for all candidates. You must respond with valid JSON only containing exactly {total_questions} questions distributed according to the specified criteria."},
             {"role": "user", "content": prompt}
         ]
         
@@ -1300,8 +1777,8 @@ class InterviewQuestionGenerator:
                 
                 # Validate that we have exactly the specified number of questions
                 if 'questions' not in questions_data or len(questions_data['questions']) != total_questions:
-                    logger.warning(f"Generated {len(questions_data.get('questions', []))} questions instead of {total_questions}, using fallback")
-                    return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions)
+                    logger.warning(f"Generated {len(questions_data.get('questions', []))} questions instead of {total_questions}, using standardized fallback")
+                    return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions, difficulty_level)
                 
                 # Validate question distribution matches the required criteria
                 generated_distribution = {'screening': 0, 'domain': 0, 'behavioral': 0, 'communication': 0}
@@ -1319,90 +1796,175 @@ class InterviewQuestionGenerator:
                         distribution_valid = False
                 
                 if not distribution_valid:
-                    logger.warning("Generated questions don't match required distribution, using fallback")
-                    return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions)
+                    logger.warning("Generated questions don't match required distribution, using standardized fallback")
+                    return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions, difficulty_level)
                 
                 # Add metadata
                 questions_data['total_questions'] = total_questions
                 questions_data['estimated_duration'] = evaluation_criteria.get('estimated_duration', 10)
                 
-                logger.info(f"Successfully generated {total_questions} personalized interview questions with correct distribution")
+                logger.info(f"Successfully generated {total_questions} standardized interview questions with correct distribution")
                 logger.info(f"Final distribution: {generated_distribution}")
                 return questions_data
                 
             except json.JSONDecodeError as e:
                 logger.error(f"Question generation JSON decode error: {str(e)}")
                 logger.error(f"Attempted to parse: {cleaned_response[:500]}...")
-                return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions)
+                return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions, difficulty_level)
             
         except Exception as e:
             logger.error(f"Error generating interview questions: {str(e)}")
-            return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions)
+            return self._generate_fallback_questions(candidate_type, candidate_level, question_distribution, total_questions, difficulty_level)
     
-    def _generate_fallback_questions(self, candidate_type: str, candidate_level: str, distribution: Dict[str, int], total_questions: int) -> Dict[str, Any]:
-        """Generate fallback questions if AI generation fails - strictly following distribution"""
+    def _generate_fallback_questions(self, candidate_type: str, candidate_level: str, distribution: Dict[str, int], total_questions: int, difficulty_level: str = 'medium') -> Dict[str, Any]:
+        """Generate standardized fallback questions if AI generation fails - strictly following distribution"""
         
+        # Define difficulty-based question variations
         fallback_questions = {
+            'easy': {
             'screening': [
-                "Can you walk me through your professional background and experience?",
-                "What interests you most about this position and our company?",
-                "How does your experience align with the requirements of this role?",
-                "Tell me about your educational background and how it prepared you for this role.",
-                "What motivated you to apply for this position?",
-                "How do you see this role fitting into your career goals?",
-                "What do you know about our company and industry?"
+                    "Can you tell me about your background and why you're interested in this role?",
+                    "What experience do you have that's relevant to this position?",
+                    "What do you know about this role and our company?",
+                    "Tell me about your education and training.",
+                    "How did you hear about this position?",
+                    "What are you looking for in your next role?",
+                    "What interests you about this field?"
             ],
             'domain': [
-                f"Describe a challenging {candidate_type} project you've worked on recently.",
-                f"How do you stay updated with the latest {candidate_type} trends and technologies?",
-                f"What {candidate_type} tools and methodologies do you prefer and why?",
-                "Can you explain a complex technical concept to a non-technical stakeholder?",
-                f"What {candidate_type} skills do you consider your strongest?",
-                f"Describe a time when you had to learn a new {candidate_type} technology quickly.",
-                f"How do you approach problem-solving in {candidate_type} contexts?",
-                f"What {candidate_type} best practices do you follow in your work?"
+                    f"What {candidate_type} experience do you have?",
+                    f"Can you tell me about the {candidate_type} tools you've used?",
+                    f"Describe a {candidate_type} project you worked on.",
+                    f"What {candidate_type} skills would you like to develop further?",
+                    f"How do you approach basic {candidate_type} tasks?",
+                    f"What {candidate_type} concepts are you familiar with?",
+                    f"Tell me about your {candidate_type} learning journey."
             ],
             'behavioral': [
-                "Describe a time when you had to work under pressure. How did you handle it?",
-                "Tell me about a situation where you had to collaborate with a difficult team member.",
-                "How do you approach learning new skills or technologies?",
-                "Describe a time when you made a mistake. How did you handle it?",
-                "Tell me about a time when you had to adapt to a significant change at work.",
-                "Describe a situation where you had to take initiative to solve a problem.",
-                "How do you handle constructive criticism?",
-                "Tell me about a time when you had to meet a tight deadline."
+                    "Tell me about a time you worked well in a team.",
+                    "How do you handle feedback?",
+                    "Describe a time you learned something new.",
+                    "How do you manage your time and priorities?",
+                    "Tell me about a challenge you faced and how you overcame it.",
+                    "How do you stay motivated at work?",
+                    "Describe your ideal work environment."
             ],
             'communication': [
-                "How do you ensure clear communication in your team?",
-                "Describe a time when you had to present complex information to stakeholders.",
-                "How do you handle feedback and criticism?",
-                "Tell me about a time when you had to explain a technical concept to someone without a technical background.",
-                "How do you prefer to communicate with team members?",
-                "Describe a situation where miscommunication caused problems and how you resolved it."
-            ]
+                    "How do you prefer to communicate with colleagues?",
+                    "Tell me about a time you had to explain something to someone.",
+                    "How do you make sure you understand instructions clearly?",
+                    "Describe your communication style.",
+                    "How do you handle misunderstandings?",
+                    "Tell me about presenting to a group."
+                ]
+            },
+            'medium': {
+                'screening': [
+                    "Walk me through your professional background and how it led you to this role.",
+                    "How does your experience align specifically with this position's requirements?",
+                    "What interests you most about this position and our company culture?",
+                    "Tell me about your educational background and relevant certifications.",
+                    "What career goals do you hope to achieve in this role?",
+                    "How do you see this position fitting into your long-term career plan?",
+                    "What do you know about our industry and current market trends?"
+                ],
+                'domain': [
+                    f"Describe a challenging {candidate_type} project you've completed successfully.",
+                    f"How do you stay current with {candidate_type} trends and best practices?",
+                    f"What {candidate_type} methodologies and tools do you prefer and why?",
+                    f"Explain how you would approach a complex {candidate_type} problem.",
+                    f"What are your strongest {candidate_type} skills and how have you applied them?",
+                    f"Describe a time you had to quickly learn a new {candidate_type} technology.",
+                    f"How do you ensure quality and efficiency in your {candidate_type} work?"
+                ],
+                'behavioral': [
+                    "Describe a time when you had to work under significant pressure and deliver results.",
+                    "Tell me about navigating a challenging team dynamic or conflict.",
+                    "How do you approach learning complex new skills or technologies?",
+                    "Describe a significant mistake you made and how you handled it.",
+                    "Tell me about adapting to a major change in your work environment.",
+                    "Describe a situation where you took initiative to solve an important problem.",
+                    "How do you balance multiple competing priorities effectively?",
+                    "Tell me about a time you had to influence others without formal authority."
+                ],
+                'communication': [
+                    "How do you ensure effective communication across diverse team members?",
+                    "Describe presenting complex technical information to non-technical stakeholders.",
+                    "How do you handle constructive criticism and incorporate feedback?",
+                    "Tell me about facilitating understanding between different departments.",
+                    "How do you adapt your communication style to different audiences?",
+                    "Describe resolving a significant miscommunication and its consequences."
+                ]
+            },
+            'very_hard': {
+                'screening': [
+                    "Analyze how your comprehensive background uniquely positions you to drive strategic impact in this role.",
+                    "Evaluate the alignment between your experience and our organization's complex challenges and growth objectives.",
+                    "What innovative perspectives do you bring that could transform how we approach this role?",
+                    "How would you leverage your educational foundation and professional development to create competitive advantages?",
+                    "Articulate your vision for how this role could evolve and create value beyond traditional expectations.",
+                    "Assess the strategic implications of your career choices and how they prepare you for industry disruption.",
+                    "How would you position our organization within the competitive landscape based on your industry insight?"
+                ],
+                'domain': [
+                    f"Design and architect a comprehensive solution for a complex, multi-stakeholder {candidate_type} challenge.",
+                    f"How would you establish thought leadership and drive innovation in {candidate_type} within our organization?",
+                    f"Evaluate competing {candidate_type} approaches and justify strategic technology decisions for enterprise-scale implementation.",
+                    f"How would you build and lead a {candidate_type} transformation initiative with significant business impact?",
+                    f"Analyze the future evolution of {candidate_type} and position our organization for emerging opportunities.",
+                    f"Design a comprehensive {candidate_type} strategy that balances innovation, risk management, and business objectives.",
+                    f"How would you establish and optimize {candidate_type} excellence across multiple teams and complex projects?"
+                ],
+                'behavioral': [
+                    "Analyze a situation where you had to make critical decisions with incomplete information under extreme pressure.",
+                    "Describe leading organizational change through significant resistance while maintaining team performance.",
+                    "How do you build expertise in emerging fields while managing multiple complex responsibilities?",
+                    "Evaluate a major strategic mistake you made and the comprehensive lessons learned.",
+                    "Describe architecting solutions for systemic organizational challenges affecting multiple stakeholders.",
+                    "How do you drive innovation and calculated risk-taking while ensuring operational excellence?",
+                    "Analyze your approach to building high-performing teams across diverse and complex environments.",
+                    "Describe influencing C-level executives and board members to support transformational initiatives."
+                ],
+                'communication': [
+                    "How do you architect communication strategies for complex, multi-stakeholder organizational transformations?",
+                    "Describe presenting strategic recommendations that influenced major business decisions to executive leadership.",
+                    "How do you synthesize and communicate complex analysis to drive consensus among conflicting stakeholder interests?",
+                    "Analyze your approach to building communication frameworks that scale across global, diverse organizations.",
+                    "How do you establish thought leadership and influence industry conversations through strategic communication?",
+                    "Describe managing communication during organizational crisis while maintaining stakeholder confidence and team morale."
+                ]
+            }
         }
         
         questions = []
         question_id = 1
         
+        # Get the appropriate difficulty level questions
+        difficulty_questions = fallback_questions.get(difficulty_level, fallback_questions['medium'])
+        
         # Only generate questions for categories with allocation > 0
         for category, count in distribution.items():
             if count > 0:  # Only generate questions if count is greater than 0
-                category_questions = fallback_questions.get(category, fallback_questions['screening'])
+                category_questions = difficulty_questions.get(category, difficulty_questions['screening'])
                 
                 for i in range(count):
                     if i < len(category_questions):
                         question_text = category_questions[i]
                     else:
                         # Generate additional questions if we need more than available
-                        question_text = f"Additional {category} question {i + 1} - Please elaborate on your experience related to this {category} area."
+                        if difficulty_level == 'easy':
+                            question_text = f"Tell me more about your {category} experience and what you've learned."
+                        elif difficulty_level == 'very_hard':
+                            question_text = f"Analyze and evaluate a complex {category} scenario where you had to drive strategic outcomes."
+                        else:
+                            question_text = f"Describe a challenging {category} situation and how you approached it systematically."
                     
                     questions.append({
                         "id": question_id,
                         "category": category,
                         "question": question_text,
-                        "focus_area": f"{category} assessment",
-                        "expected_depth": candidate_level
+                        "focus_area": f"{category} assessment ({difficulty_level} level)",
+                        "expected_depth": f"{candidate_level} - {difficulty_level} complexity"
                     })
                     question_id += 1
         
@@ -1417,7 +1979,7 @@ class InterviewQuestionGenerator:
         if distribution.get('communication', 0) > 0:
             focus_areas.append("communication skills")
         
-        interview_focus = f"Focused assessment on {', '.join(focus_areas)} for {candidate_level} {candidate_type} role"
+        interview_focus = f"Focused {difficulty_level.upper()} level assessment on {', '.join(focus_areas)} for {candidate_level} {candidate_type} role"
         
         return {
             "questions": questions,
@@ -1430,6 +1992,11 @@ class InterviewQuestionGenerator:
     async def create_interview_prompt(self, questions_data: Dict[str, Any], candidate_name: str, job_role: str) -> str:
         """Create the final interview prompt for the AI interviewer"""
         
+        # Check if this is an adaptive interview
+        if "question_pool" in questions_data:
+            return await self.create_adaptive_interview_prompt(questions_data, candidate_name, job_role)
+        
+        # Standard interview prompt (backward compatibility)
         questions = questions_data.get('questions', [])
         focus = questions_data.get('interview_focus', 'Comprehensive assessment')
         total_questions = questions_data.get('total_questions', len(questions))
@@ -1443,7 +2010,7 @@ class InterviewQuestionGenerator:
         prompt = f"""You are conducting a professional video interview for a {job_role} position with {candidate_name}.
 
 INTERVIEW STRUCTURE:
-You have exactly {total_questions} personalized questions to ask in sequence. Ask ONE question at a time and wait for the candidate's complete response before proceeding to the next question.
+You have exactly {total_questions} standardized questions to ask in sequence. Ask ONE question at a time and wait for the candidate's complete response before proceeding to the next question.
 
 YOUR {total_questions} QUESTIONS:
 {questions_list}
@@ -1462,7 +2029,76 @@ INTERVIEW FOCUS: {focus}
 
 SUCCESS CRITERIA: {questions_data.get('success_criteria', 'Clear communication and relevant experience')}
 
-Remember: This is a personalized interview tailored specifically for {candidate_name}. Make them feel comfortable while gathering comprehensive information about their qualifications and fit for the role."""
+Remember: This is a standardized interview with role-based questions for {candidate_name}. Make them feel comfortable while gathering comprehensive information about their qualifications and fit for the role."""
+
+        return prompt
+    
+    async def create_adaptive_interview_prompt(self, questions_data: Dict[str, Any], candidate_name: str, job_role: str) -> str:
+        """Create an adaptive interview prompt that adjusts difficulty based on candidate responses"""
+        
+        question_pool = questions_data.get('question_pool', {})
+        adaptive_config = questions_data.get('adaptive_config', {})
+        interview_flow = questions_data.get('interview_flow', {})
+        
+        initial_difficulty = adaptive_config.get('initial_difficulty', 'medium')
+        total_questions = adaptive_config.get('total_questions', 7)
+        questions_per_category = adaptive_config.get('questions_per_category', {})
+        adaptation_rules = adaptive_config.get('adaptation_rules', {})
+        
+        prompt = f"""You are conducting an ADAPTIVE professional video interview for a {job_role} position with {candidate_name}.
+
+ADAPTIVE INTERVIEW FRAMEWORK:
+- Initial Difficulty: {initial_difficulty.upper()}
+- Total Questions: {total_questions}
+- Mode: Adaptive (difficulty adjusts based on candidate performance)
+
+QUESTION DISTRIBUTION:
+{json.dumps(questions_per_category, indent=2)}
+
+QUESTION POOL STRUCTURE:
+{json.dumps({cat: {diff: len(qs) for diff, qs in diffs.items()} for cat, diffs in question_pool.items()}, indent=2)}
+
+ADAPTIVE RULES:
+
+1. DIFFICULTY ADJUSTMENT:
+   
+   DOWNGRADE (Hard→Medium→Easy) when:
+   - Candidate uses struggle indicators: {', '.join(adaptation_rules['struggle_indicators'])}
+   - Answers are vague, incorrect, or show confusion
+   - Multiple clarifications needed
+   - Long unproductive pauses
+   
+   UPGRADE (Easy→Medium→Hard) when:
+   - Candidate uses excellence indicators: {', '.join(adaptation_rules['excellence_indicators'])}
+   - Provides comprehensive answers with examples
+   - Shows deep understanding
+   - Demonstrates confidence and expertise
+   
+   MAINTAIN level when:
+   - Adequate but not exceptional answers
+   - Basic understanding without depth
+   - Some guidance needed but reasonable responses
+
+2. QUESTION SELECTION:
+   - Start each category at {initial_difficulty} level
+   - Select appropriate difficulty based on previous answer
+   - Use questions from: {json.dumps(question_pool, indent=2)}
+   - Track which questions you've asked
+
+3. INTERVIEW FLOW:
+   - Ask ONE question at a time
+   - Evaluate response quality
+   - Note difficulty adjustment: "[Moving to EASY/MEDIUM/HARD level]"
+   - Natural transitions: "Let me ask you something [more fundamental/more advanced]..."
+   - Complete exactly {total_questions} questions
+
+4. TRACKING:
+   After each answer, internally note:
+   - Response quality (poor/adequate/good/excellent)
+   - Difficulty decision (maintain/upgrade/downgrade)
+   - Reason for adjustment
+
+Remember: Find the candidate's optimal challenge level through adaptive questioning. Make them comfortable while accurately assessing their capabilities."""
 
         return prompt
 
@@ -2020,21 +2656,63 @@ async def create_job(job_input: JobDescriptionInput, background_tasks: Backgroun
     try:
         job_id = str(uuid.uuid4())
         
-        # Store job
-        storage.create_job(job_id, {
+        # Store job and wait for successful database storage
+        job_created = await storage.create_job(job_id, {
             "job_role": job_input.job_role,
             "required_experience": job_input.required_experience,
             "description": job_input.description
         })
         
-        # Analyze job in background
+        if not job_created:
+            logger.error(f"Failed to store job {job_id} in database")
+            raise HTTPException(status_code=500, detail="Failed to create job in database")
+        
+        # Analyze job in background only after successful creation
         background_tasks.add_task(analyze_job_background, job_id)
         
+        logger.info(f"✅ Job {job_id} created successfully and analysis started")
         return {"job_id": job_id, "status": "Job created and analysis started"}
         
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
     except Exception as e:
         logger.error(f"Error creating job: {str(e)}")
         raise HTTPException(status_code=500, detail="Failed to create job")
+
+@app.get("/api/jobs/{job_id}")
+async def get_job(job_id: str):
+    """Get a specific job by ID"""
+    try:
+        if not storage.supabase_store.supabase:
+            raise HTTPException(status_code=503, detail="Database not available")
+        
+        result = storage.supabase_store.supabase.table("job_posts").select("*").eq("id", job_id).single().execute()
+        
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        # Transform response to match frontend expectations
+        job_data = result.data
+        
+        # Flatten response and rename fields for frontend compatibility
+        response = {
+            "id": job_data.get("id"),
+            "job_role": job_data.get("job_role"),
+            "required_experience": job_data.get("required_experience"),
+            "description": job_data.get("job_description"),
+            "created_at": job_data.get("created_at"),
+            "analysis": job_data.get("job_description_analysis"),  # Rename for frontend
+            "status": "Active" if job_data.get("job_description_analysis") else "Processing"
+        }
+        
+        logger.info(f"📋 Returning job {job_id} - Analysis: {'✅ Complete' if response['analysis'] else '⏳ Processing'}")
+        return response
+        
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions as-is
+    except Exception as e:
+        logger.error(f"Error fetching job {job_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to fetch job")
 
 @app.get("/api/jobs")
 async def get_all_jobs():
@@ -2241,8 +2919,32 @@ async def get_job_results(
             # Fall back to memory storage
     
     # Fallback to memory storage (for backward compatibility)
-    logger.info(f"Falling back to memory storage for job {job_id}")
+    logger.warning(f"⚠️ Falling back to memory storage for job {job_id} - Data may be inconsistent!")
+    logger.warning("⚠️ Memory candidates may not exist in database - interview links may fail!")
     results = storage.get_results(job_id, min_score)
+    
+    # Validate that memory candidates exist in database to prevent interview link failures
+    if results and storage.supabase_store.supabase:
+        logger.info(f"🔍 Validating {len(results)} memory candidates against database...")
+        valid_results = []
+        for result in results:
+            candidate_id = result.get("id") or result.get("resume_id")
+            if candidate_id:
+                try:
+                    # Check if candidate exists in database
+                    db_check = storage.supabase_store.supabase.table("resume_results").select("id").eq("id", candidate_id).execute()
+                    if db_check.data:
+                        valid_results.append(result)
+                        logger.debug(f"✅ Candidate {candidate_id} exists in database")
+                    else:
+                        logger.warning(f"❌ Candidate {candidate_id} in memory but NOT in database - excluding from results")
+                except Exception as e:
+                    logger.error(f"❌ Error checking candidate {candidate_id}: {str(e)}")
+                    # Exclude this candidate to prevent errors
+        
+        if len(valid_results) != len(results):
+            logger.warning(f"⚠️ Filtered out {len(results) - len(valid_results)} invalid candidates from memory")
+        results = valid_results
     
     # Apply filters
     if category:
@@ -2262,7 +2964,8 @@ async def get_job_results(
         lvl = r.get("classification", {}).get("level", "unknown")
         classification_summary[cat][lvl] += 1
     
-    return {
+    # Add a warning flag if using memory storage
+    response = {
         "job_id": job_id,
         "total_results": total,
         "offset": offset,
@@ -2270,6 +2973,14 @@ async def get_job_results(
         "classification_summary": dict(classification_summary),
         "results": results
     }
+    
+    # If we're here, we used memory storage - add warning
+    if results:
+        response["data_source"] = "memory"
+        response["warning"] = "Data loaded from memory cache. Some features may not work properly."
+        logger.warning(f"⚠️ Returning {len(results)} candidates from memory for job {job_id}")
+    
+    return response
 
 @app.get("/api/jobs/{job_id}/status")
 async def get_job_status(job_id: str):
@@ -2980,21 +3691,66 @@ async def generate_interview_link(candidate_id: str):
         
         logger.info(f"🚀 Starting interview link generation for candidate {candidate_id}")
         
+        # Step 0: Validate database connection
+        if not storage.supabase_store.supabase:
+            return {
+                "status": "error",
+                "error": "Database connection not available"
+            }
+        
         # Step 1: Fetch candidate data from resume_results
         logger.info(f"📋 Fetching candidate data for ID: {candidate_id}")
+        candidate_result = None
         try:
             candidate_result = storage.supabase_store.supabase.table("resume_results").select("*").eq("id", candidate_id).single().execute()
         except Exception as e:
-            logger.error(f"❌ Error fetching candidate data: {str(e)}")
-            return {
-                "status": "error",
-                "error": f"Error fetching candidate data: {str(e)}"
-            }
+            logger.error(f"❌ Error fetching candidate data from Supabase: {str(e)}")
+            
+            # Check if this is a "no rows" error (candidate doesn't exist)
+            if "The result contains 0 rows" in str(e) or "PGRST116" in str(e):
+                logger.warning(f"⚠️ Candidate {candidate_id} not found in database, checking memory store...")
+                
+                # Try to find in memory store
+                memory_candidate = None
+                job_analyses = storage.memory_store.resume_analyses
+                for job_id, analyses in job_analyses.items():
+                    for analysis in analyses:
+                        if analysis.get('id') == candidate_id:
+                            memory_candidate = analysis
+                            logger.info(f"📋 Found candidate in memory store for job {job_id}")
+                            break
+                    if memory_candidate:
+                        break
+                
+                if memory_candidate:
+                    # Create a mock response object with memory data
+                    from types import SimpleNamespace
+                    candidate_result = SimpleNamespace()
+                    candidate_result.data = {
+                        "id": memory_candidate.get("id"),
+                        "candidate_name": memory_candidate.get("name"),
+                        "job_post_id": memory_candidate.get("job_id"),
+                        "candidate_type": memory_candidate.get("candidate_type"),
+                        "candidate_level": memory_candidate.get("candidate_level"),
+                        "fit_score": memory_candidate.get("fit_score"),
+                        "resume_analysis_data": memory_candidate
+                    }
+                    logger.info(f"✅ Using memory data for candidate {candidate_id}")
+                else:
+                    return {
+                        "status": "error",
+                        "error": f"Candidate {candidate_id} not found in database or memory. This candidate may have been deleted or the data was not properly saved."
+                    }
+            else:
+                return {
+                    "status": "error",
+                    "error": f"Database error while fetching candidate: {str(e)}"
+                }
         
-        if not candidate_result.data:
+        if candidate_result and not candidate_result.data:
             return {
                 "status": "error",
-                "error": "Candidate not found"
+                "error": "Candidate not found in database"
             }
         
         candidate = candidate_result.data
@@ -3003,11 +3759,16 @@ async def generate_interview_link(candidate_id: str):
         candidate_level = candidate["candidate_level"]
         candidate_name = candidate["candidate_name"]
         resume_analysis = candidate["resume_analysis_data"]
+        resume_score = candidate.get("fit_score", 0)  # Get resume score, default to 0 if not found
+        
+        # Determine difficulty level based on resume score
+        difficulty_level = InterviewQuestionGenerator.determine_difficulty_level(resume_score)
         
         logger.info(f"✅ Found candidate: {candidate_name} ({candidate_type}/{candidate_level}) for job {job_post_id}")
+        logger.info(f"📊 Resume score: {resume_score}% → Difficulty level: {difficulty_level.upper()}")
         
-        # Step 2: Fetch job data
-        logger.info(f"🏢 Fetching job data for ID: {job_post_id}")
+        # Step 2: Validate job exists and fetch job data
+        logger.info(f"🏢 Validating and fetching job data for ID: {job_post_id}")
         try:
             job_result = storage.supabase_store.supabase.table("job_posts").select("*").eq("id", job_post_id).single().execute()
         except Exception as e:
@@ -3058,18 +3819,31 @@ async def generate_interview_link(candidate_id: str):
         evaluation_criteria = criteria_result.data
         logger.info(f"✅ Found interview setup: {evaluation_criteria['id']}")
         
-        # Step 4: Generate personalized questions using GPT-4o
-        logger.info(f"🤖 Generating personalized questions...")
+        # Step 4: Generate questions - either adaptive pool or standard set
         openai_client = AzureOpenAIClient()
         question_generator = InterviewQuestionGenerator(openai_client)
         
-        questions_data = await question_generator.generate_personalized_questions(
+        # Check if adaptive interviews are enabled
+        if question_generator.adaptive_enabled:
+            logger.info(f"🔄 Generating ADAPTIVE question pool with initial difficulty: {difficulty_level.upper()}")
+            questions_data = await question_generator.generate_adaptive_question_pool(
             job_analysis=job_description_analysis,
-            resume_analysis=resume_analysis,
             evaluation_criteria=evaluation_criteria,
             candidate_type=candidate_type,
-            candidate_level=candidate_level
-        )
+                candidate_level=candidate_level,
+                initial_difficulty=difficulty_level
+            )
+            is_adaptive = True
+        else:
+            logger.info(f"🤖 Generating {difficulty_level.upper()} difficulty questions based on job requirements...")
+            questions_data = await question_generator.generate_standardized_questions(
+                job_analysis=job_description_analysis,
+                evaluation_criteria=evaluation_criteria,
+                candidate_type=candidate_type,
+                candidate_level=candidate_level,
+                difficulty_level=difficulty_level
+            )
+            is_adaptive = False
         
         # Step 5: Create interview prompt
         interview_prompt = await question_generator.create_interview_prompt(
@@ -3085,19 +3859,49 @@ async def generate_interview_link(candidate_id: str):
         # Calculate expiration (24 hours from now)
         expires_at = (datetime.utcnow() + timedelta(hours=24)).isoformat()
         
+        # For adaptive interviews, create a flattened version of questions for backward compatibility
+        if is_adaptive and questions_data and "question_pool" in questions_data:
+            flattened_questions = []
+            for category, difficulties in questions_data["question_pool"].items():
+                for difficulty, questions in difficulties.items():
+                    for q in questions:
+                        flattened_questions.append({
+                            "category": category,
+                            "difficulty": difficulty,
+                            "id": q["id"],
+                            "question": q["question"]
+                        })
+            logger.info(f"📋 Flattened {len(flattened_questions)} adaptive questions for database storage")
+            generated_questions_value = flattened_questions
+        else:
+            generated_questions_value = questions_data if questions_data else []
+        
+        # Ensure generated_questions is never null
+        if generated_questions_value is None:
+            logger.warning("⚠️ generated_questions was None, setting to empty array")
+            generated_questions_value = []
+        
         session_data = {
             "id": session_id,
             "resume_result_id": candidate_id,
             "job_post_id": job_post_id,
             "candidate_name": candidate_name,
-            "generated_questions": questions_data,
+            "generated_questions": generated_questions_value,  # Always populate for NOT NULL constraint
+            "adaptive_questions": questions_data if is_adaptive else None,  # New adaptive field
             "interview_prompt": interview_prompt,
             "session_url": session_url,
             "status": "pending",
+            "difficulty_level": difficulty_level,
+            "initial_difficulty": difficulty_level if is_adaptive else None,
+            "difficulty_progression": [] if is_adaptive else None,
+            "resume_score": resume_score,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
             "expires_at": expires_at
         }
+        
+        # Debug log to verify generated_questions is not null
+        logger.info(f"📊 Session data - is_adaptive: {is_adaptive}, generated_questions type: {type(generated_questions_value)}, length: {len(generated_questions_value) if generated_questions_value else 0}")
         
         # Store session in database
         logger.info(f"💾 Creating interview session...")
@@ -3280,9 +4084,7 @@ async def complete_interview(session_id: str, payload: dict):
             return {"status": "error", "error": "Interview session not found"}
 
         # 1) Pull full transcript from ElevenLabs
-        xi_key = os.getenv("ELEVENLABS_API_KEY")
-        if not xi_key:
-            return {"status": "error", "error": "ELEVENLABS_API_KEY not configured"}
+        xi_key = "sk_99b0a60fc75de64325fe89d89b145782f08054d7263064ac"
 
         transcript_text, started_at, ended_at = ElevenLabsService.fetch_transcript(conversation_id, xi_key)
 
@@ -3318,6 +4120,41 @@ async def complete_interview(session_id: str, payload: dict):
         logger.error("Error completing interview: %s", str(e))
         return {"status": "error", "error": str(e)}
 
+
+def extract_difficulty_progression(transcript: str, adaptive_config: dict = None) -> List[Dict[str, Any]]:
+    """Extract difficulty progression from interview transcript"""
+    
+    progression = []
+    
+    # Look for difficulty adjustment indicators in the transcript
+    difficulty_patterns = [
+        r"\[Moving to (\w+) level\]",
+        r"\[Adjusting to (\w+) based on (.+?)\]",
+        r"Let me ask you something more (\w+)",
+        r"Let me ask you something (\w+) fundamental",
+    ]
+    
+    lines = transcript.split('\n')
+    for i, line in enumerate(lines):
+        for pattern in difficulty_patterns:
+            match = re.search(pattern, line, re.IGNORECASE)
+            if match:
+                difficulty = match.group(1).lower()
+                if difficulty in ["easy", "medium", "hard", "fundamental", "advanced"]:
+                    # Map variations to standard levels
+                    if difficulty == "fundamental":
+                        difficulty = "easy"
+                    elif difficulty == "advanced":
+                        difficulty = "hard"
+                    
+                    progression.append({
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "difficulty": difficulty,
+                        "line_number": i,
+                        "context": line.strip()
+                    })
+    
+    return progression
 
 @app.post("/api/interviews/{session_id}/complete-with-transcript")
 async def complete_interview_with_transcript(session_id: str, payload: dict):
@@ -3378,10 +4215,38 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
         job_data = storage.get_job(job_post_id) if job_post_id else None
         job_role = job_data["job_role"] if job_data else "Unknown Role"
         candidate_name = session.get("candidate_name", "Unknown Candidate")
+        
+        # Extract difficulty progression if this is an adaptive interview
+        difficulty_progression = []
+        final_difficulty_levels = {}
+        
+        if session.get("adaptive_questions"):
+            logger.info(f"🔄 Extracting difficulty progression from adaptive interview")
+            difficulty_progression = extract_difficulty_progression(transcript_text)
+            
+            # Analyze final difficulty levels reached per category
+            if difficulty_progression:
+                categories_seen = {}
+                for prog in difficulty_progression:
+                    # Try to infer category from context or position
+                    # This is a simplified approach - could be enhanced
+                    if "screening" in prog.get("context", "").lower():
+                        categories_seen["screening"] = prog["difficulty"]
+                    elif "technical" in prog.get("context", "").lower() or "domain" in prog.get("context", "").lower():
+                        categories_seen["domain"] = prog["difficulty"]
+                    elif "behavioral" in prog.get("context", "").lower():
+                        categories_seen["behavioral"] = prog["difficulty"]
+                
+                final_difficulty_levels = categories_seen
+                logger.info(f"📊 Difficulty progression: {len(difficulty_progression)} changes detected")
+                logger.info(f"📊 Final difficulty levels: {final_difficulty_levels}")
+
+        # Get interview questions from session for proper scoring
+        interview_questions = session.get("generated_questions", [])
 
         # Analyse with GPT
         analyzer = InterviewAnalyzer(AzureOpenAIClient())
-        analysis = await analyzer.analyse(transcript_text, candidate_name, job_role)
+        analysis = await analyzer.analyse(transcript_text, candidate_name, job_role, interview_questions)
 
         # Prepare security violations data
         security_violations = {
@@ -3399,6 +4264,7 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
 
         # Prepare the row for database insertion
         row = {
+            "id": str(uuid.uuid4()),
             "interview_session_id": session_id,
             "job_post_id": job_post_id,
             "resume_result_id": session.get("resume_result_id"),
@@ -3414,8 +4280,36 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
             "duration_seconds": duration_seconds,
             "created_at": datetime.utcnow().isoformat(),
             "updated_at": datetime.utcnow().isoformat(),
-            **analysis,  # Include all analysis fields
         }
+
+        # Extract fields that exist in the database schema
+        db_fields = {
+            "domain_score": analysis.get("domain_score"),
+            "behavioral_score": analysis.get("behavioral_score"),
+            "communication_score": analysis.get("communication_score"),
+            "overall_score": analysis.get("overall_score"),
+            "confidence_level": analysis.get("confidence_level"),
+            "cheating_detected": analysis.get("cheating_detected"),
+            "body_language": analysis.get("body_language"),
+            "speech_pattern": analysis.get("speech_pattern"),
+            "areas_of_improvement": analysis.get("areas_of_improvement"),
+            "system_recommendation": analysis.get("system_recommendation"),
+            "domain_knowledge_insights": analysis.get("domain_knowledge_insights"),
+            "technical_competency_analysis": analysis.get("technical_competency_analysis"),
+            "problem_solving_approach": analysis.get("problem_solving_approach"),
+            "relevant_experience_assessment": analysis.get("relevant_experience_assessment"),
+            "knowledge_gaps": analysis.get("knowledge_gaps"),
+            "interview_performance_metrics": analysis.get("interview_performance_metrics"),
+            "behavioral_analysis": analysis.get("behavioral_analysis"),
+            "question_scores": analysis.get("question_scores"),
+            "raw_domain_score": analysis.get("raw_domain_score"),
+            "max_domain_score": analysis.get("max_domain_score"),
+            "normalized_domain_score": analysis.get("normalized_domain_score"),
+            "communication_analysis": analysis.get("communication_analysis"),  # Now this column exists!
+        }
+        
+        # Add the database fields to the row
+        row.update(db_fields)
 
         # Store additional metadata in raw_analysis
         row["raw_analysis"] = {
@@ -3425,7 +4319,9 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
                 "job_role": job_role,
                 "candidate_type": session.get("candidate_type"),
                 "candidate_level": session.get("candidate_level")
-            }
+            },
+            # Include any analysis fields not in the database schema
+            "full_analysis": analysis  # Store complete analysis for reference
         }
 
         # Store results in database
@@ -3433,23 +4329,31 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
 
         if insert_res.data:
             logger.info(f"✅ Interview results stored successfully for session {session_id}")
-            logger.info(f"📊 Analysis summary - Overall: {analysis.get('overall_score', 0)}%, Domain: {analysis.get('domain_score', 0)}%, Behavioral: {analysis.get('behavioral_score', 0)}%")
+            logger.info(f"📊 Analysis summary - Overall: {analysis.get('overall_score', 0)}%, Domain: {analysis.get('domain_score', 0)}%, Communication: {analysis.get('communication_score', 0)}%")
             
-            # Update session status
-            storage.supabase_store.supabase.table("interview_sessions").update({
+            # Update session status and difficulty progression
+            update_data = {
                 "status": "completed", 
                 "updated_at": datetime.utcnow().isoformat()
-            }).eq("id", session_id).execute()
+            }
+            
+            # Add difficulty progression data if this was an adaptive interview
+            if session.get("adaptive_questions"):
+                update_data["difficulty_progression"] = difficulty_progression
+                update_data["final_difficulty_levels"] = final_difficulty_levels
+                
+            storage.supabase_store.supabase.table("interview_sessions").update(update_data).eq("id", session_id).execute()
             
             return {"status": "success", "data": insert_res.data[0]}
         else:
-            logger.error(f"Failed to store interview results for session {session_id}")
-            return {"status": "error", "error": "Failed to store interview results"}
+            logger.error(f"Failed to store interview results - no data returned")
+            raise HTTPException(status_code=500, detail="Failed to store interview results in database")
 
     except Exception as e:
         logger.error(f"Error completing interview with transcript: {str(e)}")
         logger.error(f"Full traceback: {traceback.format_exc()}")
         return {"status": "error", "error": str(e)}
+
 
 
 @app.get("/api/interviews/{session_id}/transcript")
@@ -3615,6 +4519,77 @@ async def reanalyze_all_interviews():
         return {"status": "error", "error": str(e)}
 
 
+@app.get("/api/interviews/{session_id}/adaptive-analytics")
+async def get_adaptive_interview_analytics(session_id: str):
+    """Get adaptive interview analytics including difficulty progression"""
+    try:
+        if not storage.supabase_store.supabase:
+            return {"status": "error", "error": "Database not available"}
+        
+        # Get interview session
+        session_res = storage.supabase_store.supabase.table("interview_sessions").select("*").eq("id", session_id).single().execute()
+        
+        if not session_res.data:
+            return {"status": "error", "error": "Interview session not found"}
+        
+        session = session_res.data
+        
+        # Check if this was an adaptive interview
+        if not session.get("adaptive_questions"):
+            return {"status": "error", "error": "This is not an adaptive interview"}
+        
+        # Get interview results if available
+        results_res = storage.supabase_store.supabase.table("interview_results").select("*").eq("interview_session_id", session_id).single().execute()
+        results = results_res.data if results_res and results_res.data else None
+        
+        # Prepare analytics data
+        analytics = {
+            "session_id": session_id,
+            "candidate_name": session.get("candidate_name"),
+            "initial_difficulty": session.get("initial_difficulty"),
+            "difficulty_progression": session.get("difficulty_progression", []),
+            "final_difficulty_levels": session.get("final_difficulty_levels", {}),
+            "resume_score": session.get("resume_score"),
+            "adaptive_config": session.get("adaptive_questions", {}).get("adaptive_config", {}),
+            "progression_summary": {
+                "total_adjustments": len(session.get("difficulty_progression", [])),
+                "upgrades": sum(1 for p in session.get("difficulty_progression", []) if p.get("difficulty") == "hard"),
+                "downgrades": sum(1 for p in session.get("difficulty_progression", []) if p.get("difficulty") == "easy"),
+                "maintains": sum(1 for p in session.get("difficulty_progression", []) if p.get("difficulty") == "medium")
+            }
+        }
+        
+        # Add interview results if available
+        if results:
+            analytics["interview_scores"] = {
+                "overall_score": results.get("overall_score"),
+                "domain_score": results.get("domain_score"),
+                "behavioral_score": results.get("behavioral_score"),
+                "communication_score": results.get("communication_score")
+            }
+            
+            # Analyze correlation between difficulty and scores
+            final_difficulties = session.get("final_difficulty_levels", {})
+            if final_difficulties:
+                analytics["difficulty_score_correlation"] = {
+                    "observation": "Higher difficulty typically correlates with higher domain expertise",
+                    "final_difficulties": final_difficulties,
+                    "recommendation": "Candidate handled {} difficulty questions".format(
+                        "hard" if "hard" in final_difficulties.values() else 
+                        "medium" if "medium" in final_difficulties.values() else 
+                        "easy"
+                    )
+                }
+        
+        return {
+            "status": "success",
+            "data": analytics
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting adaptive analytics for session {session_id}: {str(e)}")
+        return {"status": "error", "error": str(e)}
+
 @app.get("/api/interviews/{session_id}/results")
 async def get_interview_results(session_id: str):
     try:
@@ -3654,9 +4629,7 @@ async def test_interview_analysis(payload: dict):
         job_role = payload.get("job_role", "Software Engineer")
         
         # 1) Pull full transcript from ElevenLabs
-        xi_key = os.getenv("ELEVENLABS_API_KEY")
-        if not xi_key:
-            return {"status": "error", "error": "ELEVENLABS_API_KEY not configured"}
+        xi_key = "sk_99b0a60fc75de64325fe89d89b145782f08054d7263064ac"
         
         transcript_text, started_at, ended_at = ElevenLabsService.fetch_transcript(conversation_id, xi_key)
         
@@ -3697,8 +4670,8 @@ async def handle_elevenlabs_webhook(request: Request):
         
         logger.info(f"Received ElevenLabs webhook with signature: {signature_header}")
         
-        # Get the webhook secret from environment
-        webhook_secret = os.getenv("ELEVENLABS_WEBHOOK_SECRET")
+        # Get the webhook secret (hardcoded)
+        webhook_secret = "wsec_675cecf55211354d73f15206ae5d4e19ab0e9ce219449d343055a699b9e0e311"
         
         # Verify signature if secret is provided (LATEST FORMAT)
         if webhook_secret and signature_header:
@@ -3801,10 +4774,7 @@ async def process_interview_completion_webhook(session_id: str, conversation_id:
         logger.info(f"🚀 Starting automatic interview analysis for session {session_id}")
         
         # 1) Pull full transcript from ElevenLabs API (backup method)
-        xi_key = os.getenv("ELEVENLABS_API_KEY")
-        if not xi_key:
-            logger.error("❌ ELEVENLABS_API_KEY not configured")
-            return
+        xi_key = "sk_99b0a60fc75de64325fe89d89b145782f08054d7263064ac"
         
         # Try to use transcript from webhook data first (latest format)
         transcript_text = ""
@@ -3890,7 +4860,7 @@ async def process_interview_completion_webhook(session_id: str, conversation_id:
         
         if insert_res.data:
             logger.info(f"✅ Interview results stored successfully for session {session_id}")
-            logger.info(f"📊 Analysis summary - Overall: {analysis.get('overall_score', 0)}%, Domain: {analysis.get('domain_score', 0)}%, Behavioral: {analysis.get('behavioral_score', 0)}%")
+            logger.info(f"📊 Analysis summary - Overall: {analysis.get('overall_score', 0)}%, Domain: {analysis.get('domain_score', 0)}%, Communication: {analysis.get('communication_score', 0)}%")
             
             # 6) Update session status to completed
             storage.supabase_store.supabase.table("interview_sessions").update({
@@ -4029,6 +4999,53 @@ async def test_delete_endpoint(job_id: str):
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
+@app.get("/api/elevenlabs/signed-url")
+async def get_elevenlabs_signed_url(agentId: str = Query(...)):
+    """Get a signed URL for ElevenLabs conversational AI"""
+    logger.info(f"🔗 Received request for signed URL with agentId: {agentId}")
+    try:
+        # Validate agentId parameter
+        if not agentId or not agentId.strip():
+            logger.error(f"❌ Invalid agentId parameter: '{agentId}'")
+            raise HTTPException(status_code=400, detail="agentId parameter is required and cannot be empty")
+        
+        # ElevenLabs API key (hardcoded)
+        elevenlabs_api_key = "sk_99b0a60fc75de64325fe89d89b145782f08054d7263064ac"
+        
+        # Make request to ElevenLabs API to get signed URL
+        headers = {
+            "xi-api-key": elevenlabs_api_key,
+            "Content-Type": "application/json"
+        }
+        
+        url = f"https://api.elevenlabs.io/v1/convai/conversation/get-signed-url?agent_id={agentId}"
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+            
+            if response.status_code != 200:
+                logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
+                return {
+                    "status": "error",
+                    "error": f"Failed to get signed URL: {response.status_code}"
+                }
+            
+            data = response.json()
+            logger.info(f"✅ Generated signed URL for agent {agentId}")
+            
+            return {
+                "status": "success",
+                "signed_url": data.get("signed_url")
+            }
+            
+    except Exception as e:
+        logger.error(f"Error getting ElevenLabs signed URL: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e)
+        }
+
+# Main app runner
 if __name__ == "__main__":
     # Validate environment variables
     if not Config.validate():

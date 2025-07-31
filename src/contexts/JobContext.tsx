@@ -159,7 +159,14 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     
     const poll = async () => {
       try {
+        console.log(`🔄 Polling job analysis (attempt ${attempts + 1}/${maxAttempts}) for job:`, jobId);
         const jobData = await ResumeScreeningApi.getJob(jobId);
+        console.log('📋 Job data received:', {
+          id: jobData.id,
+          hasAnalysis: !!jobData.analysis,
+          status: jobData.status,
+          analysisKeys: jobData.analysis ? Object.keys(jobData.analysis) : 'none'
+        });
         
         setJobs(prev => prev.map(job => 
           job.id === jobId 
@@ -172,6 +179,7 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         ));
         
         if (jobData.analysis) {
+          console.log('✅ Job analysis completed! Stopping polling.');
           toast.success('Job analysis complete!', {
             description: 'You can now upload resumes for screening.',
           });
@@ -180,8 +188,9 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         
         attempts++;
         if (attempts < maxAttempts) {
-          setTimeout(poll, 2000);
+          setTimeout(poll, 3000); // Increased to 3 seconds to reduce server load
         } else {
+          console.warn('⏱️ Job analysis polling timeout reached');
           // Timeout - mark as active anyway
           setJobs(prev => prev.map(job => 
             job.id === jobId ? { ...job, status: 'Active' } : job
@@ -191,10 +200,15 @@ export const JobProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           });
         }
       } catch (error) {
-        console.error('Error polling job analysis:', error);
+        console.error(`❌ Error polling job analysis (attempt ${attempts + 1}):`, error);
         attempts++;
         if (attempts < maxAttempts) {
-          setTimeout(poll, 2000);
+          setTimeout(poll, 3000);
+        } else {
+          console.error('❌ Max polling attempts reached, stopping');
+          toast.error('Unable to check job analysis status', {
+            description: 'Please refresh the page to check if analysis completed.',
+          });
         }
       }
     };

@@ -14,7 +14,7 @@ if %errorlevel% equ 0 (
     echo.
     echo 🌐 Once started, access at:
     echo    https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
-    echo    https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net/docs
+echo    https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net/docs
 ) else (
     echo ❌ Docker image not found. Build may still be in progress or failed.
     echo.

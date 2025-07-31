@@ -474,10 +474,15 @@ export class InterviewService {
       
       if (!response.ok) {
         const error = await response.json();
-        throw new Error(error.error || 'Failed to complete interview with transcript');
+        throw new Error(error.detail || error.error || 'Failed to complete interview with transcript');
       }
       
       const result = await response.json();
+      
+      // Check if the backend returned an error status in the response body
+      if (result.status === 'error') {
+        throw new Error(result.error || 'Failed to save interview results to database');
+      }
       return result.data;
     } catch (error) {
       console.error('Error completing interview with transcript:', error);

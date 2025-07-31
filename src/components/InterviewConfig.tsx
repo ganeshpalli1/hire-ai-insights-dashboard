@@ -46,9 +46,7 @@ interface ConfigurationState {
 
 // Question configuration options
 const questionOptions = [
-  { value: 7, label: '1-7 questions', duration: 10, description: 'approx 10 mins' },
-  { value: 11, label: '2-11 questions', duration: 15, description: 'approx 15 mins' },
-  { value: 15, label: '3-15 questions', duration: 20, description: 'approx 20 mins' },
+  { value: 7, label: '20 min interview', duration: 20 },
 ];
 
 export const InterviewConfig: React.FC<InterviewConfigProps> = ({ jobId, onPrev, onComplete }) => {
@@ -90,6 +88,22 @@ export const InterviewConfig: React.FC<InterviewConfigProps> = ({ jobId, onPrev,
       try {
         setIsLoadingData(true);
         console.log('Loading existing interview setups for job:', jobId);
+        
+        // First verify the job exists before trying to load interview setups
+        try {
+          const jobResponse = await fetch(`/api/jobs/${jobId}`);
+          if (!jobResponse.ok) {
+            console.error('Job not found:', jobId);
+            toast.error('Job not found. Please create a new job.');
+            setIsLoadingData(false);
+            return;
+          }
+        } catch (jobError) {
+          console.error('Error checking job existence:', jobError);
+          toast.error('Unable to verify job. Please try again.');
+          setIsLoadingData(false);
+          return;
+        }
         
         const response = await ResumeScreeningApi.getInterviewSetup(jobId);
         
@@ -424,7 +438,7 @@ export const InterviewConfig: React.FC<InterviewConfigProps> = ({ jobId, onPrev,
                         >
                           {questionOptions.map((option) => (
                             <option key={option.value} value={option.value}>
-                              {option.label} - {option.description}
+                              {option.label}
                             </option>
                           ))}
                         </select>
