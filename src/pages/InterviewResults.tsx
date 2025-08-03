@@ -69,8 +69,20 @@ export const InterviewResults: React.FC = () => {
             <div className="bg-gradient-to-r from-blue-50 to-indigo-50 px-8 py-8 border-b border-gray-200">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="flex items-center space-x-4">
-                  <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl">
-                    <UserIcon className="w-8 h-8" />
+                  <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl overflow-hidden">
+                    {selectedResult.user_photo_url ? (
+                      <img 
+                        src={selectedResult.user_photo_url} 
+                        alt={`${selectedResult.candidate_name || 'Candidate'} photo`}
+                        className="w-full h-full object-cover rounded-2xl"
+                        onError={(e) => {
+                          // Fallback to icon if image fails to load
+                          e.currentTarget.style.display = 'none';
+                          e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                        }}
+                      />
+                    ) : null}
+                    <UserIcon className={`w-8 h-8 ${selectedResult.user_photo_url ? 'hidden' : ''}`} />
                   </div>
                   <div>
                     <h3 className="text-2xl font-bold text-gray-900">
@@ -108,6 +120,16 @@ export const InterviewResults: React.FC = () => {
                       </a>
                     </p>
                   )}
+                  <p className="flex items-center">
+                    <span className="font-semibold mr-2">ID Verification:</span>
+                    {selectedResult.user_photo_url ? (
+                      <span className="text-green-600 text-sm flex items-center gap-1">
+                        ✓ Photo Captured
+                      </span>
+                    ) : (
+                      <span className="text-gray-500 text-sm">No photo available</span>
+                    )}
+                  </p>
                 </div>
               </div>
             </div>

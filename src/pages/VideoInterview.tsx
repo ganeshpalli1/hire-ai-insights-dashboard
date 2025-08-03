@@ -47,6 +47,14 @@ export const VideoInterview: React.FC = () => {
   const [backgroundUploadStatus, setBackgroundUploadStatus] = useState<'idle' | 'uploading' | 'analyzing' | 'complete' | 'error'>('idle');
   const [conversationId, setConversationId] = useState<string | null>(null);
   
+  // Photo capture state
+  const [userPhotoUrl, setUserPhotoUrl] = useState<string | null>(null);
+  const [photoCaptured, setPhotoCaptured] = useState(false);
+  const [isCapturingPhoto, setIsCapturingPhoto] = useState(false);
+  
+  // User activity tracking for preventing interruptions
+  const [activityTimer, setActivityTimer] = useState<NodeJS.Timeout | null>(null);
+  
   // Screen recording state
   const [recordingState, setRecordingState] = useState<any>({
     isRecording: false,
@@ -476,17 +484,28 @@ export const VideoInterview: React.FC = () => {
     }
   };
 
-  // Interview configuration
-  const interviewConfig = {
-    systemPrompt: customPrompt || `You are an expert AI interviewer conducting a comprehensive technical interview. 
-    Your approach should be:
-    - Professional yet friendly
-    - Ask follow-up questions based on responses
-    - Evaluate technical depth and problem-solving skills
-    - Provide encouragement while maintaining standards
-    - Keep responses concise and engaging
-    
-    Ask one question at a time and wait for the candidate's response before proceeding.`,
+    // Interview configuration
+const interviewConfig = {
+            systemPrompt: customPrompt || `You are an expert AI interviewer conducting a streamlined adaptive technical interview.
+Your approach should be:
+- Professional yet friendly
+- After each candidate response, provide ONLY a brief acknowledgment (maximum one line like "Thank you", "Good", "I see", "Understood")
+- NEVER mention difficulty levels, progression, or stages explicitly to the candidate
+- Automatically adapt question difficulty based on candidate performance:
+  * Start with foundational questions
+  * If they answer well, naturally progress to more complex scenarios
+  * If they struggle, provide easier variations or different angles
+  * Make transitions seamless without announcing difficulty changes
+- Ask strategic follow-up questions when needed for clarification or deeper understanding, but keep them focused and concise
+- Save detailed evaluation for the end of interview
+- Keep the interview flowing smoothly and efficiently
+- Do NOT provide lengthy feedback or analysis after each answer
+- Create a natural conversation flow where difficulty adapts invisibly
+- IMPORTANT: Be patient and give candidates time to think. If you sense they need more time (silence, "hmm", "let me think"), use the skip_turn tool to wait patiently
+- If a candidate says phrases like "give me a moment", "let me think", "hold on", or seems to be processing, use the skip_turn tool
+- Allow natural pauses - not every silence needs to be filled immediately
+
+Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adaptively chosen next question based on performance].`,
     
     firstMessage: sessionData 
       ? `Hello ${sessionData.candidate_name}! Welcome to your personalized video interview. I'm excited to learn about your experience and skills based on your background. Are you ready to begin?`
@@ -536,13 +555,23 @@ export const VideoInterview: React.FC = () => {
     overrides: {
       agent: {
         prompt: {
-          prompt: interviewConfig.systemPrompt
+          prompt: interviewConfig.systemPrompt,
+          tools: [
+            {
+              type: 'system',
+              name: 'skip_turn',
+              description: 'Use this when the user indicates they need time to think, are processing information, or say phrases like "let me think", "give me a moment", "hold on", etc.'
+            }
+          ]
         },
         firstMessage: interviewConfig.firstMessage,
         language: "en"
       },
       tts: {
         voiceId: interviewConfig.voiceId
+      },
+      conversation: {
+        clientEvents: ['user_activity']
       }
     },
     
@@ -664,7 +693,7 @@ export const VideoInterview: React.FC = () => {
         
         // Optionally update the session if we have one
         if (sessionData?.session_id) {
-          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
           fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/update-conversation`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -754,6 +783,130 @@ export const VideoInterview: React.FC = () => {
       console.error('❌ Failed to test video access:', error);
     }
   };
+
+  // Photo capture function for user identification
+  const captureUserPhoto = async (): Promise<string | null> => {
+    if (!videoRef.current || !cameraStream || isCapturingPhoto) {
+      console.log('Cannot capture photo: video not ready or already capturing');
+      return null;
+    }
+
+    try {
+      setIsCapturingPhoto(true);
+      console.log('📸 Capturing user identification photo...');
+
+      // Create canvas to capture frame from video
+      const canvas = document.createElement('canvas');
+      const video = videoRef.current;
+      
+      // Set canvas dimensions to match video
+      canvas.width = video.videoWidth || 640;
+      canvas.height = video.videoHeight || 480;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        throw new Error('Could not get canvas context');
+      }
+
+      // Draw current video frame to canvas
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      
+      // Convert canvas to blob
+      const photoBlob = await new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob((blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error('Failed to create photo blob'));
+          }
+        }, 'image/jpeg', 0.8);
+      });
+
+      // Generate unique filename for photo
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const candidateName = sessionData?.candidate_name?.replace(/[^a-zA-Z0-9]/g, '_') || 'candidate';
+      const filename = `user-photos/${candidateName}_${timestamp}.jpg`;
+
+      // Upload to Azure blob storage
+      console.log('☁️ Uploading photo to Azure blob storage...');
+      const photoUrl = await azureBlobService.uploadImage(photoBlob, filename, {
+        candidateName: candidateName,
+        captureDate: new Date().toISOString(),
+        fileType: 'identification-photo'
+      });
+      
+      if (photoUrl) {
+        setUserPhotoUrl(photoUrl);
+        setPhotoCaptured(true);
+        console.log('✅ User photo captured and uploaded successfully:', photoUrl);
+        
+        toast.success('📸 Photo captured for identification', {
+          description: 'User identification photo taken successfully.',
+          duration: 3000
+        });
+        
+        return photoUrl;
+      } else {
+        throw new Error('Failed to upload photo to blob storage');
+      }
+      
+    } catch (error) {
+      console.error('❌ Failed to capture user photo:', error);
+      toast.error('Failed to capture photo', {
+        description: 'Could not take identification photo. Please ensure camera is working.',
+        duration: 5000
+      });
+      return null;
+    } finally {
+      setIsCapturingPhoto(false);
+    }
+  };
+
+  // Signal user activity to prevent AI interruption
+  const signalUserActivity = () => {
+    if (conversation && conversation.sendUserActivity) {
+      conversation.sendUserActivity();
+      console.log('🤔 Signaled user activity - preventing AI interruption');
+    }
+    
+    // Clear existing timer
+    if (activityTimer) {
+      clearTimeout(activityTimer);
+    }
+    
+    // Set a new timer to signal activity again if user continues being active
+    const newTimer = setTimeout(() => {
+      console.log('💭 Activity protection window ended');
+    }, 3000);
+    
+    setActivityTimer(newTimer);
+  };
+
+  // Keyboard event listener for user activity
+  useEffect(() => {
+    let lastActivity = 0;
+    
+    const handleKeyPress = () => {
+      if (interviewStarted && !answering) {
+        const now = Date.now();
+        // Throttle activity signals to every 2 seconds
+        if (now - lastActivity > 2000) {
+          signalUserActivity();
+          lastActivity = now;
+        }
+      }
+    };
+
+    // Add event listener for keyboard activity only
+    document.addEventListener('keydown', handleKeyPress);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyPress);
+      if (activityTimer) {
+        clearTimeout(activityTimer);
+      }
+    };
+  }, [interviewStarted, answering, activityTimer]);
 
   // Test function to add sample transcript (for debugging)
   const addTestTranscript = () => {
@@ -953,7 +1106,7 @@ export const VideoInterview: React.FC = () => {
       
       // Try to get signed URL from backend first, then fallback to direct agent ID
       try {
-        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
         const response = await fetch(`${apiBaseUrl}/api/elevenlabs/signed-url?agentId=${agentId}`);
         
         if (!response.ok) {
@@ -1041,6 +1194,14 @@ export const VideoInterview: React.FC = () => {
       toast.success('Interview started in secure fullscreen mode', {
         description: 'Do not exit fullscreen or switch tabs during the interview.',
       });
+
+      // Capture user identification photo after 30 seconds to allow user to settle
+      setTimeout(async () => {
+        if (!photoCaptured && videoRef.current && cameraStream) {
+          console.log('🕒 Triggering automatic user identification photo capture...');
+          await captureUserPhoto();
+        }
+      }, 30000); // 30 seconds delay
       
       console.log('Interview started successfully!');
     } catch (err) {
@@ -1121,7 +1282,7 @@ export const VideoInterview: React.FC = () => {
       const durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
         
       // Send for analysis
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
       const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1133,7 +1294,8 @@ export const VideoInterview: React.FC = () => {
           duration_seconds: durationSeconds,
           cheating_flags: cheatingFlags,
           fullscreen_exit_count: fullscreenExitCount,
-          recording_url: uploadResult.blobUrl
+          recording_url: uploadResult.blobUrl,
+          user_photo_url: userPhotoUrl
         })
       });
       
@@ -1184,7 +1346,7 @@ export const VideoInterview: React.FC = () => {
         durationSeconds = 1;
           }
           
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
           const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1195,7 +1357,8 @@ export const VideoInterview: React.FC = () => {
               ended_at: endTime.toISOString(),
               duration_seconds: durationSeconds || 1,
               cheating_flags: cheatingFlags,
-              fullscreen_exit_count: fullscreenExitCount
+              fullscreen_exit_count: fullscreenExitCount,
+              user_photo_url: userPhotoUrl
             })
           });
           
@@ -1301,9 +1464,9 @@ export const VideoInterview: React.FC = () => {
   }, []); // Empty dependency array to only run on actual unmount
 
   return (
-    <div className="min-h-screen bg-[#f7f8fa] flex flex-col items-center px-2 sm:px-4 py-3 sm:py-6">
+    <div className="h-screen bg-[#f7f8fa] flex flex-col items-center px-2 sm:px-4 py-2 sm:py-3 overflow-hidden">
       {/* Header */}
-      <div className="w-full max-w-7xl flex flex-col sm:flex-row items-center justify-between mb-3 sm:mb-4 gap-3 sm:gap-0">
+      <div className="w-full max-w-7xl flex flex-col sm:flex-row items-center justify-between mb-2 sm:mb-3 gap-2 sm:gap-0 flex-shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 sm:ml-6">
           <div className="flex flex-col text-center sm:text-left">
             <span className="text-lg sm:text-2xl font-bold text-[#ff6b35] tracking-tight">Utilitarian Labs</span>
@@ -1463,7 +1626,7 @@ export const VideoInterview: React.FC = () => {
 
       {/* Security Status Bar (only visible when interview is running) */}
       {interviewStarted && (
-        <div className="w-full max-w-7xl mb-3 sm:mb-4 p-2 sm:p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg">
+        <div className="w-full max-w-7xl mb-2 sm:mb-3 p-2 sm:p-3 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-lg flex-shrink-0">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-4">
             <div className="flex flex-wrap items-center gap-2 sm:gap-4">
               <div className="flex items-center gap-2">
@@ -1509,6 +1672,24 @@ export const VideoInterview: React.FC = () => {
                   </span>
                 </div>
               )}
+              
+              {/* Photo Capture Status */}
+              {interviewStarted && (
+                <div className={`flex items-center gap-1 sm:gap-2 px-2 sm:px-3 py-1 rounded-full border ${
+                  photoCaptured 
+                    ? 'bg-green-100 border-green-300' 
+                    : 'bg-gray-100 border-gray-300'
+                }`}>
+                  <span className="text-xs">📸</span>
+                  <span className={`text-xs sm:text-sm font-medium ${
+                    photoCaptured ? 'text-green-700' : 'text-gray-600'
+                  }`}>
+                    {photoCaptured ? 'ID Photo ✓' : 'ID Photo'}
+                  </span>
+                </div>
+              )}
+
+
             </div>
             <div className="flex items-center gap-2 self-end sm:self-auto">
               {!isFullscreen && (
@@ -1527,6 +1708,18 @@ export const VideoInterview: React.FC = () => {
                   <span className="sm:hidden">Secure</span>
                 </Button>
               )}
+              {!photoCaptured && interviewStarted && cameraStream && (
+                <Button
+                  onClick={captureUserPhoto}
+                  size="sm"
+                  variant="outline"
+                  disabled={isCapturingPhoto}
+                  className="text-xs text-blue-600 hover:text-blue-700 border-blue-300 hover:bg-blue-50"
+                >
+                  {isCapturingPhoto ? '📸...' : '📸 Capture ID'}
+                </Button>
+              )}
+
               <Button
                 onClick={endInterview}
                 size="sm"
@@ -1541,14 +1734,13 @@ export const VideoInterview: React.FC = () => {
       )}
 
       {/* Main content */}
-      <div className="w-full max-w-7xl flex-1 flex flex-col justify-center items-center">
+      <div className="w-full max-w-7xl flex-1 flex flex-col items-center min-h-0">
         {/* Video layout - side by side on desktop, stacked on mobile */}
-        <div className="flex flex-col lg:flex-row w-full max-w-7xl gap-3 sm:gap-4 lg:gap-6 mb-4 sm:mb-6 items-center justify-center">
+        <div className="flex flex-col lg:flex-row w-full max-w-7xl gap-2 sm:gap-3 lg:gap-4 mb-2 sm:mb-3 mt-4 sm:mt-6 items-center justify-center flex-shrink-0">
           {/* Left: Camera feed */}
-          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
+          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
                style={{
-                 height: 'clamp(250px, 50vw, 400px)',
-                 maxHeight: '540px'
+                 height: 'clamp(200px, 35vh, 320px)'
                }}>
             {cameraStream ? (
               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover rounded-lg sm:rounded-2xl" />
@@ -1573,10 +1765,9 @@ export const VideoInterview: React.FC = () => {
           </div>
           
           {/* Right: AI Avatar video */}
-          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-2xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
+          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
                style={{
-                 height: 'clamp(250px, 50vw, 400px)',
-                 maxHeight: '540px'
+                 height: 'clamp(200px, 35vh, 320px)'
                }}>
             {/* AI Avatar Video Area */}
             <Card className="h-full w-full">
@@ -1616,15 +1807,15 @@ export const VideoInterview: React.FC = () => {
                 </div>
         
         {/* Bottom: Transcript */}
-        <div className="w-full max-w-7xl bg-white rounded-lg sm:rounded-2xl shadow-lg p-4 sm:p-6 mb-4 min-h-[150px] sm:min-h-[200px]">
-          <div className="flex items-center justify-between mb-3 sm:mb-4">
-            <h3 className="font-bold text-base sm:text-lg">Current Conversation</h3>
+        <div className="w-full max-w-7xl bg-white rounded-lg sm:rounded-xl shadow-lg p-3 sm:p-4 flex flex-col" style={{ height: 'clamp(180px, 25vh, 250px)' }}>
+          <div className="flex items-center justify-between mb-2 sm:mb-3 flex-shrink-0">
+            <h3 className="font-bold text-sm sm:text-base">Current Conversation</h3>
             <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-600">
               <span className={`w-2 h-2 rounded-full ${conversation.status === 'connected' ? 'bg-green-500' : 'bg-gray-400'}`} />
               <span className="hidden sm:inline">{conversation.status}</span>
             </div>
           </div>
-          <div className="space-y-2 sm:space-y-3 max-h-32 sm:max-h-40 overflow-y-auto">
+          <div className="space-y-2 sm:space-y-3 flex-1 overflow-y-auto">
             {transcript.length === 0 && !interviewStarted && (
               <div className="text-center text-gray-500 py-6 sm:py-8 text-sm sm:text-base">Start the interview to see the current conversation</div>
             )}
@@ -1653,20 +1844,20 @@ export const VideoInterview: React.FC = () => {
         
         {/* Start / End buttons */}
         {!interviewStarted ? (
-          <div className="w-full flex justify-center mt-4 sm:mt-8">
+          <div className="w-full flex justify-center mt-2 sm:mt-3 flex-shrink-0">
             <Button 
               onClick={startInterview} 
-              className="px-6 sm:px-10 py-3 sm:py-4 text-lg sm:text-xl font-bold rounded-lg sm:rounded-xl shadow bg-blue-700 hover:bg-blue-800 text-white"
+              className="px-6 sm:px-8 py-2 sm:py-3 text-base sm:text-lg font-bold rounded-lg shadow bg-blue-700 hover:bg-blue-800 text-white"
             >
               Start Interview
             </Button>
           </div>
         ) : (
-          <div className="w-full flex justify-center mt-4">
+          <div className="w-full flex justify-center mt-2 sm:mt-3 flex-shrink-0">
             <Button 
               onClick={endInterview} 
               variant="destructive" 
-              className="px-6 sm:px-8 py-2 sm:py-3 text-base sm:text-lg font-semibold rounded-lg sm:rounded-xl"
+              className="px-4 sm:px-6 py-2 text-sm sm:text-base font-semibold rounded-lg"
             >
               End Interview
             </Button>

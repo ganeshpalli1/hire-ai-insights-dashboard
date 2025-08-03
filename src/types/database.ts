@@ -79,6 +79,7 @@ export type Database = {
           transcript_entries: Json | null
           transcript_source: string | null
           updated_at: string | null
+          user_photo_url: string | null
         }
         Insert: {
           areas_of_improvement?: string[] | null
@@ -120,6 +121,7 @@ export type Database = {
           transcript_entries?: Json | null
           transcript_source?: string | null
           updated_at?: string | null
+          user_photo_url?: string | null
         }
         Update: {
           areas_of_improvement?: string[] | null
@@ -161,6 +163,7 @@ export type Database = {
           transcript_entries?: Json | null
           transcript_source?: string | null
           updated_at?: string | null
+          user_photo_url?: string | null
         }
         Relationships: [
           {

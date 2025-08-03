@@ -730,7 +730,8 @@ class InterviewAnalyzer:
             "        \"score\": 0-5,\n"
             "        \"scoring_rationale\": \"Explanation of why this score was given\",\n"
             "        \"is_domain_question\": boolean,\n"
-            "        \"is_followup_question\": boolean\n"
+            "        \"is_followup_question\": boolean,\n"
+            "        \"is_initial_question\": boolean\n"
             "      }\n"
             "    ],\n"
             "    \"total_questions\": int,\n"
@@ -767,8 +768,9 @@ class InterviewAnalyzer:
             "2. Give score=0 for: empty answers, 'I don't know', skipped questions, or no response\n"
             "3. Exclude greeting/welcome messages (Hello, Welcome, Are you ready to begin, etc.) from scoring\n"
             "4. Mark questions as domain questions if they test technical/job-specific knowledge\n"
-            "5. Mark follow-up questions (elaborate, give example, etc.) as is_followup_question=true\n"
-            "6. For follow-up questions: Score the follow-up as it represents the final answer to the main question\n"
+            "5. Mark FIRST question as is_initial_question=true and is_followup_question=false\n"
+            "6. Mark follow-up questions (elaborate, give example, etc.) as is_followup_question=true\n"
+            "7. For follow-up questions: Score the follow-up as it represents the final answer to the main question\n"
             "7. Score ALL actual interview questions including follow-ups\n"
             "8. Focus evaluation on technical competency and domain expertise\n"
             "9. Respond ONLY with valid JSON, no additional text or formatting."
@@ -787,6 +789,7 @@ class InterviewAnalyzer:
             f"- DO NOT score greeting/welcome messages (Hello, Welcome, Are you ready to begin, etc.)\n"
             f"- For follow-up questions: Score the follow-up answer as the final answer to the main question\n"
             f"- Only score actual interview questions that test knowledge or skills\n"
+            f"- FIRST question should ALWAYS be marked as is_initial_question=true and is_followup_question=false\n"
             f"Identify which questions test domain/technical knowledge (is_domain_question=true).\n"
             f"Mark follow-up questions (elaborate, example, tell more) as is_followup_question=true.\n"
             f"Score ALL actual interview questions including follow-ups.\n"
@@ -841,9 +844,16 @@ class InterviewAnalyzer:
                     is_greeting = self._is_greeting_question(q["question"])
                     q["is_greeting"] = is_greeting
                     
-                    # Check if it's a follow-up question
-                    is_followup = self._is_followup_question(q["question"])
-                    q["is_followup_question"] = is_followup
+                    # FIRST QUESTION LOGIC: Never mark first question as follow-up, always mark as initial
+                    if i == 0:
+                        q["is_followup_question"] = False
+                        q["is_initial_question"] = True
+                        is_followup = False
+                    else:
+                        # Check if it's a follow-up question (only for non-first questions)
+                        is_followup = self._is_followup_question(q["question"])
+                        q["is_followup_question"] = is_followup
+                        q["is_initial_question"] = False
                     
                     # Exclude greetings from scoring
                     if is_greeting:
@@ -4172,6 +4182,7 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
         cheating_flags = payload.get("cheating_flags", [])
         fullscreen_exit_count = payload.get("fullscreen_exit_count", 0)
         recording_url = payload.get("recording_url")  # Azure Blob Storage URL
+        user_photo_url = payload.get("user_photo_url")  # User identification photo URL
         
         # Allow empty transcripts but create a minimal one if completely empty
         if not transcript_text or transcript_text.strip() == "":
@@ -4209,6 +4220,7 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
         logger.info(f"Duration: {duration_seconds} seconds")
         logger.info(f"Security violations: {len(cheating_flags)}")
         logger.info(f"Recording URL: {recording_url if recording_url else 'No recording URL provided'}")
+        logger.info(f"User photo URL: {user_photo_url if user_photo_url else 'No photo URL provided'}")
 
         # Get job information for context
         job_post_id = session.get("job_post_id")
@@ -4275,6 +4287,7 @@ async def complete_interview_with_transcript(session_id: str, payload: dict):
             "security_violations": security_violations,
             "candidate_name": candidate_name,
             "recording_url": recording_url,  # Azure Blob Storage URL
+            "user_photo_url": user_photo_url,  # User identification photo URL
             "started_at": started_at.isoformat(),
             "ended_at": ended_at.isoformat(),
             "duration_seconds": duration_seconds,

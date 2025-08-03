@@ -195,6 +195,62 @@ export class AzureBlobService {
   }
 
   /**
+   * Upload image file (for user photos, etc.)
+   */
+  async uploadImage(
+    imageBlob: Blob,
+    fileName: string,
+    metadata?: { [key: string]: string }
+  ): Promise<string | null> {
+    try {
+      if (!this.containerClient) {
+        throw new Error('Azure Blob Storage not initialized');
+      }
+
+      console.log(`📤 Starting image upload: ${fileName} (${(imageBlob.size / 1024).toFixed(2)} KB)`);
+
+      // Get block blob client
+      const blockBlobClient = this.containerClient.getBlockBlobClient(fileName);
+
+      // Prepare blob metadata
+      const blobMetadata = {
+        uploadDate: new Date().toISOString(),
+        fileType: 'image',
+        ...metadata
+      };
+
+      // Upload options
+      const uploadOptions = {
+        metadata: blobMetadata,
+        blobHTTPHeaders: {
+          blobContentType: imageBlob.type || 'image/jpeg',
+          blobCacheControl: 'max-age=31536000' // 1 year cache
+        }
+      };
+
+      // Upload the blob
+      const uploadResponse = await blockBlobClient.uploadData(imageBlob, uploadOptions);
+
+      if (uploadResponse.errorCode) {
+        throw new Error(`Upload failed: ${uploadResponse.errorCode}`);
+      }
+
+      console.log('✅ Image upload completed successfully');
+      console.log(`📊 Upload details:`, {
+        blobUrl: blockBlobClient.url,
+        requestId: uploadResponse.requestId,
+        etag: uploadResponse.etag
+      });
+
+      return blockBlobClient.url;
+
+    } catch (error) {
+      console.error('❌ Image upload failed:', error);
+      return null;
+    }
+  }
+
+  /**
    * Upload with chunked/resumable approach for very large files
    */
   async uploadLargeRecording(

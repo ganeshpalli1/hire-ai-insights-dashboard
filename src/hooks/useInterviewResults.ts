@@ -27,6 +27,7 @@ export interface InterviewResult {
   raw_analysis: any;
   security_violations: any;
   recording_url?: string;
+  user_photo_url?: string;
   created_at: string;
   updated_at: string;
   // Weighted scoring fields
@@ -41,6 +42,7 @@ export interface InterviewResult {
       scoring_rationale: string;
       is_domain_question: boolean;
       is_followup_question: boolean;
+      is_initial_question?: boolean;
       difficulty?: string;
       difficulty_multiplier?: number;
       weighted_score?: number;
