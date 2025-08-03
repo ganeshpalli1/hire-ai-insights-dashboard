@@ -1,5 +1,5 @@
 // API Service for Resume Screening Backend Integration
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'; // Use environment variable or fallback to localhost
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net'; // Use environment variable or fallback to Azure backend
 
 // Types matching the backend models
 export interface JobDescriptionInput {
