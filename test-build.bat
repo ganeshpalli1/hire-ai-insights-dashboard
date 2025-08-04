@@ -13,8 +13,8 @@ if %errorlevel% equ 0 (
     echo    docker-compose up -d     (background)
     echo.
     echo 🌐 Once started, access at:
-    echo    https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
-echo    https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net/docs
+    echo    http://localhost:8000
+echo    http://localhost:8000/docs
 ) else (
     echo ❌ Docker image not found. Build may still be in progress or failed.
     echo.

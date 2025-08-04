@@ -88,13 +88,13 @@ If you need to change the fallback URLs (when environment variable is not set):
 
 ## 📋 Current Backend Configuration
 
-### Current Production Backend
+### Current Backend
 ```
-URL: https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
+URL: http://localhost:8000
 ```
 
-### Previously Used URLs
-- http://localhost:8000 (Previous local development backend)
+### Previously Used URLs  
+- https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net (Previous Azure production backend)
 - https://backendb2b.azurewebsites.net (Previous Azure deployment)
 - https://hire-ai-rg-backend-gafpbjhkdgemdsfp.southindia-01.azurewebsites.net (Previous Azure deployment)
 
@@ -145,6 +145,13 @@ grep -r "azurewebsites.net" .
 ```
 
 ## 📝 Changelog
+
+### 2025-01-XX - Latest Update (ROLLBACK TO LOCALHOST)
+- Rolled back all fallback URLs from Azure production backend to http://localhost:8000 for local development
+- Changed configuration from Azure production backend to local development backend
+- Updated 8 core application files and documentation
+- Azure URL moved to 'Previously Used URLs'
+- Updated comprehensive documentation for backend URL management
 
 ### 2025-07-30 - Migration to Azure Production Backend
 - Updated all fallback URLs from http://localhost:8000 to https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net

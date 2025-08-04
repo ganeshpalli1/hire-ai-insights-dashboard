@@ -693,7 +693,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
         
         // Optionally update the session if we have one
         if (sessionData?.session_id) {
-          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
           fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/update-conversation`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
@@ -1106,7 +1106,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
       
       // Try to get signed URL from backend first, then fallback to direct agent ID
       try {
-        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+        const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
         const response = await fetch(`${apiBaseUrl}/api/elevenlabs/signed-url?agentId=${agentId}`);
         
         if (!response.ok) {
@@ -1282,7 +1282,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
       const durationSeconds = Math.floor((endTime.getTime() - startTime.getTime()) / 1000);
         
       // Send for analysis
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
       const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1346,7 +1346,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
         durationSeconds = 1;
           }
           
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
           const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1708,17 +1708,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
                   <span className="sm:hidden">Secure</span>
                 </Button>
               )}
-              {!photoCaptured && interviewStarted && cameraStream && (
-                <Button
-                  onClick={captureUserPhoto}
-                  size="sm"
-                  variant="outline"
-                  disabled={isCapturingPhoto}
-                  className="text-xs text-blue-600 hover:text-blue-700 border-blue-300 hover:bg-blue-50"
-                >
-                  {isCapturingPhoto ? '📸...' : '📸 Capture ID'}
-                </Button>
-              )}
+
 
               <Button
                 onClick={endInterview}
