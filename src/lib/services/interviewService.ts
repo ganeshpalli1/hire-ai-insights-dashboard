@@ -353,6 +353,10 @@ export class InterviewService {
     status: string;
     created_at: string;
     expires_at: string;
+    difficulty_level?: string;
+    initial_difficulty?: string;
+    resume_score?: number;
+    is_adaptive?: boolean;
   }> {
     try {
       const response = await fetch(`${API_BASE_URL}/api/interviews/${sessionId}`);

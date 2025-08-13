@@ -247,7 +247,11 @@ class SupabaseStore:
             logger.info(f"Attempting to store resume result for job {job_id}")
             logger.debug(f"Resume data keys: {list(resume_data.keys())}")
             
-            # Map the data to Supabase schema
+            # Extract component scores from detailed analysis
+            detailed_analysis = resume_data.get("detailed_analysis", {})
+            component_scores = detailed_analysis.get("component_scores", {})
+            
+            # Map the data to Supabase schema with new component score columns
             data = {
                 "id": resume_data.get("resume_id"),
                 "job_post_id": job_id,
@@ -258,9 +262,17 @@ class SupabaseStore:
                 "matching_skills": resume_data.get("matching_skills", []),
                 "missing_skills": resume_data.get("missing_skills", []),
                 "recommendation": resume_data.get("recommendation", "MANUAL_REVIEW"),
-                "detailed_feedback": resume_data.get("detailed_analysis", {}).get("explanation", ""),
-                "resume_analysis_data": resume_data.get("detailed_analysis", {}),
+                "detailed_feedback": resume_data.get("detailed_analysis", {}).get("detailed_feedback", ""),
+                "resume_analysis_data": detailed_analysis,
                 "resume_file_name": resume_data.get("filename"),
+                # New component score columns
+                "technical_skills_score": int(round(float(component_scores.get("technical_skills", 0)))),
+                "experience_level_score": int(round(float(component_scores.get("experience_level", 0)))),
+                "domain_knowledge_score": int(round(float(component_scores.get("domain_knowledge", 0)))),
+                "soft_skills_score": int(round(float(component_scores.get("soft_skills", 0)))),
+                "education_qualifications_score": int(round(float(component_scores.get("education_qualifications", 0)))),
+                "scoring_justification": detailed_analysis.get("scoring_justification", {}),
+                "score_validation": detailed_analysis.get("score_validation", {}),
                 "created_at": datetime.utcnow().isoformat(),
                 "updated_at": datetime.utcnow().isoformat()
             }
@@ -707,13 +719,23 @@ class InterviewAnalyzer:
         system_prompt = (
             "You are an AI talent-acquisition assistant analyzing a job interview. "
             "Score each question-answer pair individually focusing on domain/technical knowledge.\n\n"
-            "SCORING CRITERIA:\n"
-            "0 = No answer/Skipped/Unable to answer/Empty response\n"
-            "1 = Incorrect or irrelevant\n"
-            "2 = Vague or incomplete\n"
-            "3 = Partially correct or shallow\n"
-            "4 = Mostly correct, some minor gaps\n"
-            "5 = Complete, accurate, in-depth, contextual\n\n"
+            "SCORING CRITERIA (BE STRICT - MOST ANSWERS SHOULD GET 0-2):\n"
+            "0 = No answer/Skipped/Unable to answer/Empty response/'I don't know'\n"
+            "1 = Incorrect, irrelevant, or fundamentally wrong concepts\n"
+            "2 = Vague, incomplete, or addresses only small part of question (like your example)\n"
+            "3 = Partially correct with some understanding but missing key components or examples\n"
+            "4 = Mostly correct and complete with minor gaps - addresses all parts of question\n"
+            "5 = Complete, accurate, comprehensive with examples and deep understanding\n\n"
+            "STRICT REQUIREMENTS FOR MULTI-PART QUESTIONS:\n"
+            "- If question asks for A AND B, candidate MUST provide both A AND B to score above 2\n"
+            "- If question asks for examples, candidate MUST provide examples to score above 2\n"
+            "- If question asks to 'explain difference', candidate MUST explain BOTH concepts and their differences\n"
+            "- Incomplete answers that only address part of question = maximum score 1-2\n\n"
+            "SCORING EXAMPLES:\n"
+            "Question: 'Explain supervised vs unsupervised learning with examples'\n"
+            "Answer: 'Supervised learning uses labeled data' = Score 1-2 (incomplete, no unsupervised explanation, no examples)\n"
+            "Answer: 'Supervised uses labeled data, unsupervised finds patterns' = Score 2-3 (basic but no examples)\n"
+            "Answer: 'Supervised uses labeled data like email spam detection, unsupervised finds hidden patterns like customer clustering' = Score 4-5\n\n"
             "SPECIAL HANDLING:\n"
             "- If the candidate didn't answer, skipped, or said they don't know: score = 0\n"
             "- Empty or missing answers: score = 0\n"
@@ -784,7 +806,11 @@ class InterviewAnalyzer:
             user_prompt = (
                 f"Candidate: {candidate_name}\nRole interviewed for: {job_role}\n\n"
             f"Score each question-answer pair below using the 0-5 criteria.\n"
-            f"IMPORTANT: \n"
+            f"CRITICAL SCORING RULES: \n"
+            f"- BE STRICT: If question asks for A AND B, candidate MUST provide both to score above 2\n"
+            f"- If question asks for examples, candidate MUST provide examples to score above 2\n"
+            f"- Incomplete answers addressing only part of question = maximum score 1-2\n"
+            f"- Example: 'Supervised learning uses labeled data' for question asking about BOTH supervised AND unsupervised with examples = Score 1-2 (NOT 3!)\n"
             f"- Give score=0 for empty answers, 'I don't know', or skipped questions\n"
             f"- DO NOT score greeting/welcome messages (Hello, Welcome, Are you ready to begin, etc.)\n"
             f"- For follow-up questions: Score the follow-up answer as the final answer to the main question\n"
@@ -1279,35 +1305,13 @@ class JobAnalyzer:
             except json.JSONDecodeError as e:
                 logger.error(f"JSON decode error: {str(e)}")
                 logger.error(f"Attempted to parse: {cleaned_response[:500]}...")
-                
-                # Fallback analysis
-                analysis_data = {
-                    "required_skills": {"technical": [], "soft": [], "domain": []},
-                    "nice_to_have_skills": [],
-                    "key_responsibilities": [],
-                    "required_qualifications": [],
-                    "experience_requirements": {"years": required_experience, "type": "general"},
-                    "technology_stack": [],
-                    "industry_domain": "general",
-                    "job_category": "tech"
-                }
-                logger.warning("Using fallback job analysis due to JSON parsing error")
+                raise ValueError(f"Failed to parse job analysis JSON: {str(e)}")
             
             return analysis_data
                 
         except Exception as e:
             logger.error(f"Error in job analysis: {str(e)}")
-            # Return fallback analysis
-            return {
-                "required_skills": {"technical": [], "soft": [], "domain": []},
-                "nice_to_have_skills": [],
-                "key_responsibilities": [],
-                "required_qualifications": [],
-                "experience_requirements": {"years": required_experience, "type": "general"},
-                "technology_stack": [],
-                "industry_domain": "general",
-                "job_category": "tech"
-            }
+            raise
 
 # Interview Question Generator
 class InterviewQuestionGenerator:
@@ -2028,18 +2032,28 @@ YOUR {total_questions} QUESTIONS:
 INTERVIEW GUIDELINES:
 1. Start with a warm, professional greeting and brief introduction
 2. Ask questions in the exact order listed above
-3. Listen carefully to responses and provide brief encouraging feedback
-4. Ask natural follow-up questions if responses are too brief or unclear
-5. Keep the interview conversational but focused
-6. Maintain a professional yet friendly tone throughout
-7. After all {total_questions} questions, provide a brief closing and thank the candidate
-8. Keep track of time - aim for approximately {estimated_duration} minutes total
+3. **CRITICAL: After each candidate response, provide ONLY a brief acknowledgment AND immediately proceed to the next action:**
+   - If response is complete and satisfactory: "Thank you. [Immediately ask next question]"
+   - If response needs follow-up: "Good. [Immediately ask follow-up question]"
+   - **NEVER give acknowledgment and stop - always continue immediately**
+4. **NEVER provide lengthy explanations, corrections, or detailed feedback after answers**
+5. **MANDATORY: Ask follow-up questions when responses are:**
+   - Too brief (less than 2 sentences for technical questions)
+   - Unclear or contain obvious errors/typos
+   - Missing key components (examples, specific details, etc.)
+   - Vague or lack concrete examples when examples are expected
+6. Keep the interview conversational but focused
+7. Maintain a professional yet friendly tone throughout
+8. After all {total_questions} questions, provide a brief closing and thank the candidate
+9. Keep track of time - aim for approximately {estimated_duration} minutes total
 
 INTERVIEW FOCUS: {focus}
 
 SUCCESS CRITERIA: {questions_data.get('success_criteria', 'Clear communication and relevant experience')}
 
-Remember: This is a standardized interview with role-based questions for {candidate_name}. Make them feel comfortable while gathering comprehensive information about their qualifications and fit for the role."""
+Remember: This is a standardized interview with role-based questions for {candidate_name}. Make them feel comfortable while gathering comprehensive information about their qualifications and fit for the role.
+
+**ABSOLUTELY CRITICAL: After each answer, give brief acknowledgment AND immediately continue. Format: "Thank you. [Next question]" or "Good. [Follow-up question]". NEVER give acknowledgment and stop - always proceed immediately.**"""
 
         return prompt
     
@@ -2102,13 +2116,19 @@ ADAPTIVE RULES:
    - Natural transitions: "Let me ask you something [more fundamental/more advanced]..."
    - Complete exactly {total_questions} questions
 
-4. TRACKING:
+4. RESPONSE PROTOCOL:
+   **CRITICAL: After each candidate response, provide ONLY a brief acknowledgment (maximum one line like "Thank you", "Good", "I see", "Understood")**
+   **NEVER provide lengthy explanations, corrections, or detailed feedback after answers**
+   
+5. TRACKING:
    After each answer, internally note:
    - Response quality (poor/adequate/good/excellent)
    - Difficulty decision (maintain/upgrade/downgrade)
    - Reason for adjustment
 
-Remember: Find the candidate's optimal challenge level through adaptive questioning. Make them comfortable while accurately assessing their capabilities."""
+Remember: Find the candidate's optimal challenge level through adaptive questioning. Make them comfortable while accurately assessing their capabilities.
+
+**ABSOLUTELY CRITICAL: After each answer, give brief acknowledgment AND immediately continue. Format: "Thank you. [Next question]" or "Good. [Follow-up question]". NEVER give acknowledgment and stop - always proceed immediately.**"""
 
         return prompt
 
@@ -2219,6 +2239,126 @@ class ResumeAnalyzer:
             logger.error(f"Full repair error: {traceback.format_exc()}")
             return json_str  # Return original if repair fails
     
+    def _validate_and_recalculate_score(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate component scores and recalculate weighted final score"""
+        try:
+            # Extract component scores
+            component_scores = analysis.get("component_scores", {})
+            
+            # Define weights
+            weights = {
+                "technical_skills": 0.35,
+                "experience_level": 0.25,
+                "domain_knowledge": 0.20,
+                "soft_skills": 0.10,
+                "education_qualifications": 0.10
+            }
+            
+            # Validate component scores exist and are in valid range
+            valid_components = {}
+            for component, weight in weights.items():
+                if component not in component_scores:
+                    raise ValueError(f"Missing required component score: {component}")
+                
+                score = component_scores[component]
+                
+                # Ensure score is in valid range (0-100)
+                if not isinstance(score, (int, float)) or score < 0 or score > 100:
+                    raise ValueError(f"Invalid {component} score: {score}. Must be between 0-100")
+                
+                valid_components[component] = float(score)
+            
+            # Calculate weighted score
+            calculated_score = sum(valid_components[component] * weights[component] 
+                                 for component in weights.keys())
+            
+            # Round to 1 decimal place
+            calculated_score = round(calculated_score, 1)
+            
+            # Get AI's proposed score
+            ai_score = analysis.get("fit_score", calculated_score)
+            
+            # Check if AI score is significantly different from calculated score
+            score_difference = abs(float(ai_score) - calculated_score)
+            if score_difference > 5.0:  # Allow 5 point tolerance
+                logger.warning(f"AI score ({ai_score}) differs from calculated score ({calculated_score}) by {score_difference:.1f} points. Using calculated score.")
+                analysis["fit_score"] = calculated_score
+                analysis["score_validation"] = {
+                    "ai_proposed_score": ai_score,
+                    "calculated_score": calculated_score,
+                    "difference": score_difference,
+                    "used_calculated": True
+                }
+            else:
+                analysis["fit_score"] = calculated_score  # Use calculated score for consistency
+                analysis["score_validation"] = {
+                    "ai_proposed_score": ai_score,
+                    "calculated_score": calculated_score,
+                    "difference": score_difference,
+                    "used_calculated": False
+                }
+            
+            # Update component scores in analysis
+            analysis["component_scores"] = valid_components
+            
+            # Update recommendation based on final score
+            final_score = analysis["fit_score"]
+            if final_score >= 90:
+                recommendation = "EXCEPTIONAL_FIT"
+            elif final_score >= 80:
+                recommendation = "STRONG_FIT"
+            elif final_score >= 70:
+                recommendation = "GOOD_FIT"
+            elif final_score >= 60:
+                recommendation = "MODERATE_FIT"
+            elif final_score >= 40:
+                recommendation = "WEAK_FIT"
+            elif final_score >= 20:
+                recommendation = "POOR_FIT"
+            else:
+                recommendation = "NO_FIT"
+            
+            # Only override recommendation if it's inconsistent with score
+            current_recommendation = analysis.get("recommendation", "")
+            if current_recommendation not in [recommendation, "MANUAL_REVIEW"]:
+                logger.info(f"Updated recommendation from {current_recommendation} to {recommendation} based on score {final_score}")
+                analysis["recommendation"] = recommendation
+            
+            logger.info(f"Score validation completed: Final={final_score}, Components={valid_components}")
+            
+            return analysis
+            
+        except Exception as e:
+            logger.error(f"Error in score validation: {str(e)}")
+            logger.error(f"Full validation error: {traceback.format_exc()}")
+            raise
+    
+    def _log_score_distribution(self, analysis: Dict[str, Any], resume_filename: str) -> None:
+        """Log score distribution for monitoring scoring accuracy"""
+        try:
+            final_score = analysis.get("fit_score", 0)
+            component_scores = analysis.get("component_scores", {})
+            recommendation = analysis.get("recommendation", "UNKNOWN")
+            
+            logger.info(f"📊 SCORE DISTRIBUTION for {resume_filename}:")
+            logger.info(f"   Final Score: {final_score} ({recommendation})")
+            logger.info(f"   Technical Skills: {component_scores.get('technical_skills', 'N/A')} (35% weight)")
+            logger.info(f"   Experience Level: {component_scores.get('experience_level', 'N/A')} (25% weight)")
+            logger.info(f"   Domain Knowledge: {component_scores.get('domain_knowledge', 'N/A')} (20% weight)")
+            logger.info(f"   Soft Skills: {component_scores.get('soft_skills', 'N/A')} (10% weight)")
+            logger.info(f"   Education/Quals: {component_scores.get('education_qualifications', 'N/A')} (10% weight)")
+            
+            # Log score validation info if available
+            validation = analysis.get("score_validation", {})
+            if validation:
+                logger.info(f"   Score Validation: AI={validation.get('ai_proposed_score', 'N/A')}, "
+                          f"Calculated={validation.get('calculated_score', 'N/A')}, "
+                          f"Difference={validation.get('difference', 'N/A')}, "
+                          f"Used Calculated={validation.get('used_calculated', 'N/A')}")
+                          
+        except Exception as e:
+            logger.error(f"Error logging score distribution: {str(e)}")
+    
     async def classify_resume(self, resume_text: str) -> ResumeClassification:
         """Classify resume into category and level"""
         
@@ -2283,14 +2423,7 @@ class ResumeAnalyzer:
             except json.JSONDecodeError as e:
                 logger.error(f"Classification JSON decode error: {str(e)}")
                 logger.error(f"Attempted to parse: {cleaned_response[:500]}...")
-                
-                # Fallback classification
-                classification_data = {
-                    "category": "tech",
-                    "level": "mid", 
-                    "confidence": 0.5
-                }
-                logger.warning("Using fallback classification due to JSON parsing error")
+                raise ValueError(f"Failed to parse resume classification JSON: {str(e)}")
             
             # Track classification metrics
             classification_counter.labels(
@@ -2306,19 +2439,14 @@ class ResumeAnalyzer:
         except Exception as e:
             logger.error(f"Resume classification error: {str(e)}")
             logger.error(f"Full error details: {traceback.format_exc()}")
-            # Default classification on error
-            return ResumeClassification(
-                category="tech",
-                level="mid",
-                confidence=0.5
-            )
+            raise
     
     async def analyze_resume(self, resume_text: str, job_analysis: Dict[str, Any], 
                            job_description: str, classification: ResumeClassification) -> Dict[str, Any]:
-        """Analyze resume fit for job with classification context"""
+        """Analyze resume fit for job with classification context using structured scoring rubric"""
         
         prompt = f"""
-        Analyze the following resume against the job requirements:
+        Analyze the following resume against the job requirements using a structured multi-dimensional scoring approach:
         
         RESUME CLASSIFICATION:
         - Category: {classification.category}
@@ -2333,17 +2461,91 @@ class ResumeAnalyzer:
         RESUME:
         {resume_text}
         
+        SCORING FRAMEWORK:
+        Score each dimension from 0-100, then calculate weighted final score:
+        
+        1. TECHNICAL SKILLS MATCH (35% weight):
+        - 90-100: All key technical skills present + advanced proficiency
+        - 80-89: Most key technical skills + good proficiency
+        - 70-79: Core technical skills + adequate proficiency
+        - 60-69: Some technical skills + basic proficiency
+        - 40-59: Few technical skills + limited proficiency
+        - 20-39: Minimal technical skills + poor match
+        - 0-19: No relevant technical skills
+        
+        2. EXPERIENCE LEVEL MATCH (25% weight):
+        - 90-100: Perfect years match + perfect seniority level
+        - 80-89: Close years match + appropriate seniority
+        - 70-79: Reasonable years + slight level mismatch
+        - 60-69: Some experience gap + level concerns
+        - 40-59: Significant experience gap + wrong level
+        - 20-39: Major experience deficit + completely wrong level
+        - 0-19: No relevant experience
+        
+        3. DOMAIN KNOWLEDGE (20% weight):
+        - 90-100: Expert in exact industry/domain + deep specialization
+        - 80-89: Strong domain knowledge + relevant specialization
+        - 70-79: Good domain understanding + some relevant experience
+        - 60-69: Basic domain knowledge + limited relevance
+        - 40-59: Minimal domain knowledge + poor relevance
+        - 20-39: Wrong domain + minimal transferable knowledge
+        - 0-19: Completely different domain
+        
+        4. SOFT SKILLS MATCH (10% weight):
+        - 90-100: All soft skills demonstrated + leadership examples
+        - 80-89: Most soft skills + good examples
+        - 70-79: Core soft skills + adequate examples
+        - 60-69: Some soft skills + basic examples
+        - 40-59: Few soft skills + weak examples
+        - 20-39: Minimal soft skills + poor examples
+        - 0-19: No relevant soft skills demonstrated
+        
+        5. EDUCATION/QUALIFICATIONS (10% weight):
+        - 90-100: Perfect educational match + relevant certifications
+        - 80-89: Strong educational background + some certifications
+        - 70-79: Good educational foundation + basic qualifications
+        - 60-69: Adequate education + few qualifications
+        - 40-59: Basic education + missing qualifications
+        - 20-39: Poor educational match + no relevant qualifications
+        - 0-19: No relevant education or qualifications
+        
+        FINAL SCORE CALCULATION:
+        Final Score = (Technical Skills × 0.35) + (Experience × 0.25) + (Domain × 0.20) + (Soft Skills × 0.10) + (Education × 0.10)
+        
+        OVERALL SCORE RANGES:
+        - 90-100: Exceptional fit (all key skills + years + perfect level match)
+        - 80-89: Strong fit (most key skills + appropriate experience)  
+        - 70-79: Good fit (core skills present + reasonable experience gap)
+        - 60-69: Moderate fit (some skills + significant experience gaps)
+        - 40-59: Weak fit (few matching skills + major gaps)
+        - 20-39: Poor fit (minimal overlap + wrong level/category)
+        - 0-19: No fit (completely unrelated background)
+        
         Provide analysis in this EXACT JSON format (no additional text, no markdown):
         {{
+            "component_scores": {{
+                "technical_skills": 0-100,
+                "experience_level": 0-100,
+                "domain_knowledge": 0-100,
+                "soft_skills": 0-100,
+                "education_qualifications": 0-100
+            }},
             "fit_score": 0-100,
             "matching_skills": ["skill1", "skill2", "skill3"],
             "missing_skills": ["missing1", "missing2"],
             "experience_score": 0-100,
-            "recommendation": "STRONG_FIT or GOOD_FIT or MODERATE_FIT or WEAK_FIT",
-            "detailed_feedback": "Single paragraph comprehensive feedback"
+            "recommendation": "EXCEPTIONAL_FIT or STRONG_FIT or GOOD_FIT or MODERATE_FIT or WEAK_FIT or POOR_FIT or NO_FIT",
+            "detailed_feedback": "Single paragraph comprehensive feedback explaining the scoring rationale",
+            "scoring_justification": {{
+                "technical_reasoning": "Brief explanation for technical skills score",
+                "experience_reasoning": "Brief explanation for experience score",
+                "domain_reasoning": "Brief explanation for domain score",
+                "soft_skills_reasoning": "Brief explanation for soft skills score",
+                "education_reasoning": "Brief explanation for education score"
+            }}
         }}
         
-        Keep it simple and ensure valid JSON syntax.
+        IMPORTANT: Be strict with scoring. Most candidates should NOT score above 85. Only give 90+ for truly exceptional matches.
         """
         
         messages = [
@@ -2373,7 +2575,10 @@ class ResumeAnalyzer:
             try:
                 analysis = json.loads(cleaned_response)
                 logger.info("Successfully parsed analysis JSON")
-                return analysis
+                
+                # Validate and recalculate weighted score if needed
+                validated_analysis = self._validate_and_recalculate_score(analysis)
+                return validated_analysis
             except json.JSONDecodeError as e:
                 logger.error(f"Analysis JSON decode error: {str(e)}")
                 logger.error(f"Attempted to parse: {cleaned_response[:500]}...")
@@ -2387,22 +2592,8 @@ class ResumeAnalyzer:
                     return analysis
                 except Exception as repair_error:
                     logger.error(f"JSON repair failed: {str(repair_error)}")
+                    raise ValueError(f"Failed to parse and repair resume analysis JSON: {str(e)}")
                 
-                # Create fallback analysis
-                fallback_analysis = {
-                    "fit_score": 50.0,
-                    "matching_skills": ["Analysis failed"],
-                    "missing_skills": ["Manual review required"],
-                    "experience_score": 50,
-                    "recommendation": "MANUAL_REVIEW",
-                    "detailed_feedback": "Automatic analysis failed due to parsing error. Manual review recommended."
-                }
-                logger.warning("Using fallback analysis due to JSON parsing error")
-                return fallback_analysis
-                
-        except json.JSONDecodeError:
-            logger.error("Failed to parse resume analysis response")
-            raise
         except Exception as e:
             logger.error(f"Resume analysis error: {str(e)}")
             logger.error(f"Full error details: {traceback.format_exc()}")
@@ -2465,6 +2656,9 @@ class BatchProcessor:
                     resume_text, job_analysis, job_description, classification
                 )
                 
+                # Log detailed score breakdown for this specific resume
+                self.resume_analyzer._log_score_distribution(analysis, filename)
+                
                 # Extract results
                 result = ResumeAnalysisResult(
                     resume_id=resume_id,
@@ -2492,46 +2686,7 @@ class BatchProcessor:
             except Exception as e:
                 logger.error(f"Error processing resume {resume_id} ({filename}): {str(e)}")
                 logger.error(f"Full error: {traceback.format_exc()}")
-                
-                # Try to extract name even in fallback case
-                try:
-                    extracted_name = await self.name_extractor.extract_candidate_name(resume_text, filename)
-                except:
-                    extracted_name = self.name_extractor._extract_name_from_filename(filename)
-                
-                # Create a fallback result instead of failing completely
-                fallback_classification = ResumeClassification(
-                    category="tech",
-                    level="mid", 
-                    confidence=0.5
-                )
-                
-                fallback_result = ResumeAnalysisResult(
-                    resume_id=resume_id,
-                    filename=filename,
-                    classification=fallback_classification,
-                    fit_score=50.0,
-                    matching_skills=["Analysis failed - manual review required"],
-                    missing_skills=["Could not analyze due to processing error"],
-                    recommendation="MANUAL_REVIEW",
-                    detailed_analysis={
-                        "error": str(e),
-                        "status": "processing_failed",
-                        "note": "This resume could not be automatically analyzed. Manual review recommended."
-                    }
-                )
-                
-                # Prepare fallback data with extracted name
-                fallback_data = fallback_result.dict()
-                fallback_data["extracted_candidate_name"] = extracted_name
-                
-                # Store fallback result using .dict() for Pydantic models
-                storage.add_resume_analysis(job_id, fallback_data)
-                
-                resume_processed_counter.inc()
-                logger.warning(f"Created fallback result for '{extracted_name}' due to processing error")
-                
-                return fallback_result
+                raise
     
     def _flatten_skills(self, skills_dict: Dict[str, List[str]]) -> List[str]:
         """Flatten nested skills dictionary"""
@@ -2898,6 +3053,16 @@ async def get_job_results(
                         "missing_skills": row["missing_skills"] or [],
                         "recommendation": row["recommendation"],
                         "detailed_analysis": row["resume_analysis_data"] or {},
+                        # Include component scores from new columns
+                        "component_scores": {
+                            "technical_skills": row["technical_skills_score"],
+                            "experience_level": row["experience_level_score"],
+                            "domain_knowledge": row["domain_knowledge_score"],
+                            "soft_skills": row["soft_skills_score"],
+                            "education_qualifications": row["education_qualifications_score"]
+                        },
+                        "scoring_justification": row["scoring_justification"] or {},
+                        "score_validation": row["score_validation"] or {},
                         "created_at": row["created_at"]
                     }
                     transformed_results.append(transformed_result)
@@ -3993,7 +4158,12 @@ async def get_interview_session(session_id: str):
                 "generated_questions": session["generated_questions"],
                 "status": "active",
                 "created_at": session["created_at"],
-                "expires_at": session["expires_at"]
+                "expires_at": session["expires_at"],
+                # Include difficulty information for frontend use
+                "difficulty_level": session.get("difficulty_level"),
+                "initial_difficulty": session.get("initial_difficulty"),
+                "resume_score": session.get("resume_score"),
+                "is_adaptive": session.get("adaptive_questions") is not None
             }
         }
         

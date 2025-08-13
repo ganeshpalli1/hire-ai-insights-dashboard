@@ -46,6 +46,7 @@ export type Database = {
           body_language: string | null
           candidate_name: string | null
           cheating_detected: boolean | null
+          communication_analysis: Json | null
           communication_score: number | null
           completed_at: string | null
           confidence_level: string | null
@@ -88,6 +89,7 @@ export type Database = {
           body_language?: string | null
           candidate_name?: string | null
           cheating_detected?: boolean | null
+          communication_analysis?: Json | null
           communication_score?: number | null
           completed_at?: string | null
           confidence_level?: string | null
@@ -130,6 +132,7 @@ export type Database = {
           body_language?: string | null
           candidate_name?: string | null
           cheating_detected?: boolean | null
+          communication_analysis?: Json | null
           communication_score?: number | null
           completed_at?: string | null
           confidence_level?: string | null
@@ -375,6 +378,9 @@ export type Database = {
           candidate_type: string
           created_at: string | null
           detailed_feedback: string | null
+          domain_knowledge_score: number | null
+          education_qualifications_score: number | null
+          experience_level_score: number | null
           fit_score: number | null
           id: string
           job_post_id: string | null
@@ -383,6 +389,10 @@ export type Database = {
           recommendation: string | null
           resume_analysis_data: Json
           resume_file_name: string | null
+          score_validation: Json | null
+          scoring_justification: Json | null
+          soft_skills_score: number | null
+          technical_skills_score: number | null
           updated_at: string | null
         }
         Insert: {
@@ -391,6 +401,9 @@ export type Database = {
           candidate_type: string
           created_at?: string | null
           detailed_feedback?: string | null
+          domain_knowledge_score?: number | null
+          education_qualifications_score?: number | null
+          experience_level_score?: number | null
           fit_score?: number | null
           id?: string
           job_post_id?: string | null
@@ -399,6 +412,10 @@ export type Database = {
           recommendation?: string | null
           resume_analysis_data: Json
           resume_file_name?: string | null
+          score_validation?: Json | null
+          scoring_justification?: Json | null
+          soft_skills_score?: number | null
+          technical_skills_score?: number | null
           updated_at?: string | null
         }
         Update: {
@@ -407,6 +424,9 @@ export type Database = {
           candidate_type?: string
           created_at?: string | null
           detailed_feedback?: string | null
+          domain_knowledge_score?: number | null
+          education_qualifications_score?: number | null
+          experience_level_score?: number | null
           fit_score?: number | null
           id?: string
           job_post_id?: string | null
@@ -415,6 +435,10 @@ export type Database = {
           recommendation?: string | null
           resume_analysis_data?: Json
           resume_file_name?: string | null
+          score_validation?: Json | null
+          scoring_justification?: Json | null
+          soft_skills_score?: number | null
+          technical_skills_score?: number | null
           updated_at?: string | null
         }
         Relationships: [
@@ -565,29 +589,3 @@ export const Constants = {
     Enums: {},
   },
 } as const
-
-// Additional type definitions for our application
-export type JobPost = Tables<'job_posts'>
-export type JobPostInsert = TablesInsert<'job_posts'>
-export type JobPostUpdate = TablesUpdate<'job_posts'>
-
-export type ResumeResult = Tables<'resume_results'>
-export type ResumeResultInsert = TablesInsert<'resume_results'>
-export type ResumeResultUpdate = TablesUpdate<'resume_results'>
-
-export type InterviewSetup = Tables<'interview_setup'>
-export type InterviewSetupInsert = TablesInsert<'interview_setup'>
-export type InterviewSetupUpdate = TablesUpdate<'interview_setup'>
-
-export type InterviewSession = Tables<'interview_sessions'>
-export type InterviewSessionInsert = TablesInsert<'interview_sessions'>
-export type InterviewSessionUpdate = TablesUpdate<'interview_sessions'>
-
-export type InterviewResult = Tables<'interview_results'>
-export type InterviewResultInsert = TablesInsert<'interview_results'>
-export type InterviewResultUpdate = TablesUpdate<'interview_results'>
-
-// Enums for candidate types and levels
-export type CandidateType = 'tech' | 'non-tech' | 'semi-tech'
-export type CandidateLevel = 'entry' | 'mid' | 'senior'
-export type RecommendationType = 'STRONG_FIT' | 'GOOD_FIT' | 'MODERATE_FIT' | 'WEAK_FIT' | 'MANUAL_REVIEW' 

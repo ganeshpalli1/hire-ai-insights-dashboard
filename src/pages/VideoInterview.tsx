@@ -459,17 +459,23 @@ export const VideoInterview: React.FC = () => {
       console.log('Session loaded successfully:', {
         candidate: session.candidate_name,
         questions: session.generated_questions?.questions?.length,
-        status: session.status
+        status: session.status,
+        difficulty_level: session.difficulty_level,
+        resume_score: session.resume_score,
+        is_adaptive: session.is_adaptive
       });
       
       setSessionData(session);
       setCustomPrompt(session.interview_prompt);
       
-      // Show welcome message
+      // Show welcome message with difficulty information
+      const difficultyInfo = session.difficulty_level ? ` (${session.difficulty_level.charAt(0).toUpperCase() + session.difficulty_level.slice(1)} level based on resume score: ${session.resume_score}%)` : '';
       toast.success(
-        `Welcome ${session.candidate_name}!`,
+        `Welcome ${session.candidate_name}!${difficultyInfo}`,
         {
-          description: 'Your personalized interview is ready. Click "Start Interview" to begin.',
+          description: session.is_adaptive ? 
+            'Your adaptive interview is ready. Questions will adjust based on your responses.' :
+            'Your personalized interview is ready. Click "Start Interview" to begin.',
         }
       );
       
@@ -489,14 +495,15 @@ const interviewConfig = {
             systemPrompt: customPrompt || `You are an expert AI interviewer conducting a streamlined adaptive technical interview.
 Your approach should be:
 - Professional yet friendly
-- After each candidate response, provide ONLY a brief acknowledgment (maximum one line like "Thank you", "Good", "I see", "Understood")
+- After each candidate response, provide brief acknowledgment AND immediately continue: "Thank you. [Next question]" or "Good. [Follow-up question]" - NEVER stop after acknowledgment
 - NEVER mention difficulty levels, progression, or stages explicitly to the candidate
 - Automatically adapt question difficulty based on candidate performance:
   * Start with foundational questions
   * If they answer well, naturally progress to more complex scenarios
   * If they struggle, provide easier variations or different angles
   * Make transitions seamless without announcing difficulty changes
-- Ask strategic follow-up questions when needed for clarification or deeper understanding, but keep them focused and concise
+- **MANDATORY: Ask follow-up questions when responses are too brief (less than 2 sentences), unclear, contain errors, or lack required examples**
+- Follow-ups should be focused and concise but are REQUIRED for poor quality responses
 - Save detailed evaluation for the end of interview
 - Keep the interview flowing smoothly and efficiently
 - Do NOT provide lengthy feedback or analysis after each answer
@@ -505,7 +512,7 @@ Your approach should be:
 - If a candidate says phrases like "give me a moment", "let me think", "hold on", or seems to be processing, use the skip_turn tool
 - Allow natural pauses - not every silence needs to be filled immediately
 
-Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adaptively chosen next question based on performance].`,
+Format: Brief acknowledgment + immediate continuation: "Thank you. [Next question]" OR "Good. [Follow-up question]" - NEVER pause after acknowledgment.`,
     
     firstMessage: sessionData 
       ? `Hello ${sessionData.candidate_name}! Welcome to your personalized video interview. I'm excited to learn about your experience and skills based on your background. Are you ready to begin?`
@@ -839,11 +846,6 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
         setUserPhotoUrl(photoUrl);
         setPhotoCaptured(true);
         console.log('✅ User photo captured and uploaded successfully:', photoUrl);
-        
-        toast.success('📸 Photo captured for identification', {
-          description: 'User identification photo taken successfully.',
-          duration: 3000
-        });
         
         return photoUrl;
       } else {
@@ -1428,6 +1430,23 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
       });
     }
     
+    // Stop camera stream immediately after interview completion
+    if (cameraStream) {
+      console.log('📷 Stopping camera stream after interview completion...');
+      cameraStream.getTracks().forEach((track) => track.stop());
+      setCameraStream(null);
+      
+      // Clear video source
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
+      }
+      
+      // Also clean up the window.cameraStream reference
+      if ((window as any).cameraStream) {
+        (window as any).cameraStream = undefined;
+      }
+    }
+    
     // Reset state
     setInterviewStarted(false);
     setTranscript([]);
@@ -1726,12 +1745,9 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
       {/* Main content */}
       <div className="w-full max-w-7xl flex-1 flex flex-col items-center min-h-0">
         {/* Video layout - side by side on desktop, stacked on mobile */}
-        <div className="flex flex-col lg:flex-row w-full max-w-7xl gap-2 sm:gap-3 lg:gap-4 mb-2 sm:mb-3 mt-4 sm:mt-6 items-center justify-center flex-shrink-0">
+        <div className="flex flex-col lg:flex-row w-full max-w-7xl gap-2 sm:gap-3 lg:gap-4 mb-2 sm:mb-3 mt-3 sm:mt-4 items-center justify-center flex-shrink-0 lg:flex-1 lg:min-h-0">
           {/* Left: Camera feed */}
-          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
-               style={{
-                 height: 'clamp(200px, 35vh, 320px)'
-               }}>
+          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-xl shadow-lg p-0 overflow-hidden flex items-center justify-center h-[22vh] sm:h-[26vh] lg:h-full min-h-[200px]">
             {cameraStream ? (
               <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover rounded-lg sm:rounded-2xl" />
             ) : (
@@ -1755,10 +1771,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
           </div>
           
           {/* Right: AI Avatar video */}
-          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-xl shadow-lg p-0 overflow-hidden flex items-center justify-center" 
-               style={{
-                 height: 'clamp(200px, 35vh, 320px)'
-               }}>
+          <div className="w-full lg:flex-1 lg:min-w-0 bg-white rounded-lg sm:rounded-xl shadow-lg p-0 overflow-hidden flex items-center justify-center h-[22vh] sm:h-[26vh] lg:h-full min-h-[200px]">
             {/* AI Avatar Video Area */}
             <Card className="h-full w-full">
               <CardContent className="p-0 h-full relative bg-gradient-to-br from-blue-900 to-purple-900 rounded-lg sm:rounded-2xl">
@@ -1797,7 +1810,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
                 </div>
         
         {/* Bottom: Transcript */}
-        <div className="w-full max-w-7xl bg-white rounded-lg sm:rounded-xl shadow-lg p-3 sm:p-4 flex flex-col" style={{ height: 'clamp(180px, 25vh, 250px)' }}>
+        <div className="w-full max-w-7xl bg-white rounded-lg sm:rounded-xl shadow-lg p-3 sm:p-4 flex flex-col h-[28vh] sm:h-[26vh] lg:h-[28vh] min-h-[160px] flex-shrink-0 overflow-hidden">
           <div className="flex items-center justify-between mb-2 sm:mb-3 flex-shrink-0">
             <h3 className="font-bold text-sm sm:text-base">Current Conversation</h3>
             <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-600">
@@ -1805,7 +1818,7 @@ Format: Brief acknowledgment (1 line max) → [Wait for user if needed OR Adapti
               <span className="hidden sm:inline">{conversation.status}</span>
             </div>
           </div>
-          <div className="space-y-2 sm:space-y-3 flex-1 overflow-y-auto">
+          <div className="space-y-2 sm:space-y-3 flex-1 overflow-y-auto min-h-0">
             {transcript.length === 0 && !interviewStarted && (
               <div className="text-center text-gray-500 py-6 sm:py-8 text-sm sm:text-base">Start the interview to see the current conversation</div>
             )}
