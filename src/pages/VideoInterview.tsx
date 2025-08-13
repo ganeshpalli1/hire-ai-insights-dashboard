@@ -700,7 +700,7 @@ Format: Brief acknowledgment + immediate continuation: "Thank you. [Next questio
         
         // Optionally update the session if we have one
         if (sessionData?.session_id) {
-          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+          const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
           fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/update-conversation`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },

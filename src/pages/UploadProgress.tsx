@@ -100,7 +100,7 @@ export const UploadProgress: React.FC = () => {
       setUploadStatus('analyzing');
       
       // Send transcript to backend for analysis
-      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+      const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net';
       const response = await fetch(`${apiBaseUrl}/api/interviews/${sessionData.session_id}/complete-with-transcript`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

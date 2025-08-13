@@ -90,11 +90,11 @@ If you need to change the fallback URLs (when environment variable is not set):
 
 ### Current Backend
 ```
-URL: http://localhost:8000
+URL: https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net
 ```
 
 ### Previously Used URLs  
-- https://chandanbackend-gbh6bdgzepaxd9fn.canadacentral-01.azurewebsites.net (Previous Azure production backend)
+- http://localhost:8000 (Previous local development backend)
 - https://backendb2b.azurewebsites.net (Previous Azure deployment)
 - https://hire-ai-rg-backend-gafpbjhkdgemdsfp.southindia-01.azurewebsites.net (Previous Azure deployment)
 
